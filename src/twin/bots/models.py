@@ -26,6 +26,8 @@ class BotRun(Base):
     )
     joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recording_uri: Mapped[str | None] = mapped_column(String(512))
+    recording_sha256: Mapped[str | None] = mapped_column(String(64))
 
 
 class TranscriptSegment(Base):
