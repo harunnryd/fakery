@@ -1,0 +1,26 @@
+# Run once per schema change (after building the fakery:dev image):
+#   just k8s-migrate
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: twin-migrate
+  namespace: fakery
+  labels:
+    app.kubernetes.io/name: twin-migrate
+    app.kubernetes.io/component: migration
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: twin-migrate
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: fakery:dev
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - secretRef: {name: twin-secrets}

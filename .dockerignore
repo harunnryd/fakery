@@ -1,0 +1,8 @@
+.git
+.venv
+.pytest_cache
+.ruff_cache
+research
+.env
+*.png
+uv.lock.orig
