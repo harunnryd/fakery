@@ -1,9 +1,7 @@
-# Redis Streams is the only boundary between API and workers (decision #3).
-# The stream entry doubles as the run's lease on reality: claimed entries stay
-# pending until a terminal state acks them; XAUTOCLAIM takes over orphans.
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 STREAM = "bots:runs"
@@ -38,17 +36,23 @@ async def enqueue_run(redis: Redis, bot_id: str) -> None:
 async def claim_run(
     redis: Redis, consumer: str, block_ms: int = CLAIM_BLOCK_MS
 ) -> tuple[str, str] | None:
-    """Next new run for this consumer, or None after block_ms of silence."""
-    await ensure_group(redis)
     try:
-        rows = await redis.xreadgroup(GROUP, consumer, {STREAM: ">"}, count=1, block=block_ms)
+        rows = await _read_group(redis, consumer, block_ms)
     except RedisTimeoutError:
-        return None  # blocking read expiring on silence is the expected idle path
+        return None
+    except ResponseError as err:
+        if "NOGROUP" not in str(err):
+            raise
+        await ensure_group(redis)
+        rows = await _read_group(redis, consumer, block_ms)
     return _first_entry(rows)
 
 
+async def _read_group(redis: Redis, consumer: str, block_ms: int) -> list:
+    return await redis.xreadgroup(GROUP, consumer, {STREAM: ">"}, count=1, block=block_ms)
+
+
 async def reclaim_stale(redis: Redis, consumer: str) -> tuple[str, str] | None:
-    """Take over a pending entry whose worker died mid-run."""
     await ensure_group(redis)
     cursor, entries, _ = await redis.xautoclaim(
         STREAM, GROUP, consumer, min_idle_time=ORPHAN_IDLE_MS, start_id="0", count=1
