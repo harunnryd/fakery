@@ -1,35 +1,28 @@
-"""Browser engine abstraction + the validated join knowledge.
-
-Call sites depend on MeetBrowser, never on a concrete browser library
-— the engine is swappable (stealth browsers get licensed and delisted;
-the join approach must survive that).
-
-Join knowledge validated live (2026-09-06, ledger in research/): stock
-headless is fingerprint-blocked; a headed stealth engine with a
-persistent signed-in profile reaches prejoin unattended; the guest
-tier (no Google account) joins too — but only with the humanization
-layer (locale-coherent context, mouse telemetry, per-keystroke
-typing). A robotic knock is silently discarded ("System info will be
-sent to confirm you're not a bot"); a human-paced knock is offered to
-the host and admitted. Selectors stay out of code until wiring —
-recipes are versioned data re-derived by live probe, never hand-encoded.
-"""
-
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+FAKE_MEDIA_ARGS = (
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
+    "--autoplay-policy=no-user-gesture-required",
+)
+
 
 class MeetBrowser(Protocol):
-    async def open(self, meeting_url: str) -> Any:
-        """Return a live page sitting in the meeting (post-admission)."""
-        ...
+    async def open(self, meeting_url: str) -> Any: ...
+
+    async def close(self) -> None: ...
 
 
 @dataclass(slots=True)
 class EngineConfig:
     profile_dir: Path
     headed: bool = True
+    locale: str = "id-ID"
+    timezone: str = "Asia/Jakarta"
+    guest: bool = False
+    init_scripts: tuple[str, ...] = field(default_factory=tuple)
 
 
 class PatchrightBrowser:
@@ -37,18 +30,46 @@ class PatchrightBrowser:
 
     def __init__(self, config: EngineConfig) -> None:
         self._config = config
+        self._pw: Any = None
+        self._context: Any = None
 
     async def open(self, meeting_url: str) -> Any:
         # Lazy import: patchright is an optional extra and its browser
         # binaries are installed out-of-band (uv sync --extra browser).
         from patchright.async_api import async_playwright
 
-        self._config.profile_dir.expanduser().mkdir(parents=True, exist_ok=True)
-        playwright = await async_playwright().start()
-        context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self._config.profile_dir),
-            headless=not self._config.headed,
+        self._pw = await async_playwright().start()
+        self._context = await self._new_context()
+        for script in self._config.init_scripts:
+            await self._context.add_init_script(script)
+        return await self._context.new_page()
+
+    async def close(self) -> None:
+        if self._context is not None:
+            await self._context.close()
+        if self._pw is not None:
+            await self._pw.stop()
+
+    async def _new_context(self) -> Any:
+        config = self._config
+        if config.guest:
+            browser = await self._pw.chromium.launch(
+                headless=not config.headed, args=FAKE_MEDIA_ARGS
+            )
+            context = await browser.new_context(
+                locale=config.locale, timezone_id=config.timezone, viewport=None
+            )
+            await context.grant_permissions(
+                ["microphone", "camera"], origin="https://meet.google.com"
+            )
+            return context
+        profile_dir = config.profile_dir.expanduser()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        return await self._pw.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
+            headless=not config.headed,
+            args=FAKE_MEDIA_ARGS,
             no_viewport=True,
+            locale=config.locale,
+            timezone_id=config.timezone,
         )
-        page = await context.new_page()
-        return page
