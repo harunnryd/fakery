@@ -2,8 +2,6 @@ BASE_TYPE_URL = "https://api.fakery.dev/problems"
 
 
 class TwinError(Exception):
-    """RFC 9457 problem carrying a stable slug across API and logs."""
-
     def __init__(self, slug: str, title: str, status: int, detail: str = "") -> None:
         super().__init__(detail or title)
         self.slug = slug
@@ -24,7 +22,6 @@ class TwinError(Exception):
         }
 
 
-# Catalog: slug -> (title, http status).
 _CATALOG: dict[str, tuple[str, int]] = {
     "validation-failed": ("Request failed validation", 422),
     "unauthorized": ("Missing or invalid credentials", 401),

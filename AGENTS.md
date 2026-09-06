@@ -41,10 +41,9 @@ just migrate    # alembic upgrade head
 - Type hints on public functions; `async` for I/O boundaries.
 - Self-documenting code: names carry the WHAT; functions short and
   single-purpose; no magic numbers — named constants instead; short
-  parameter lists, related data grouped into objects. Comments and
-  docstrings carry only WHY a name cannot express (non-obvious reason,
-  workaround with removal condition, external spec citation) — never a
-  restatement of the code, no commented-out code.
+  parameter lists, related data grouped into objects. No comments and
+  no docstrings anywhere — code, names, and `research/` are the only
+  documentation (`# type: ignore` directives are functional, allowed).
 - Tests are table-driven via `pytest.mark.parametrize` with descriptive
   case IDs; one test function per behavior.
 - No secrets, tokens, cookies, or meeting URLs in the repo. Logs redact
