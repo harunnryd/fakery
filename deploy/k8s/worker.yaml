@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: fakery
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/component: bot-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker
+        app.kubernetes.io/component: bot-worker
+    spec:
+      containers:
+        - name: worker
+          image: fakery:dev
+          imagePullPolicy: IfNotPresent
+          # Headed Chromium under a virtual framebuffer — the humanization
+          # layer needs a real rendering path, not bare headless.
+          command: ["xvfb-run", "-a", "python", "-m", "twin.worker"]
+          envFrom:
+            - secretRef: {name: twin-secrets}
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "3Gi"
