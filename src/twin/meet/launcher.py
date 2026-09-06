@@ -26,16 +26,12 @@ class EngineConfig:
 
 
 class PatchrightBrowser:
-    """Tier-2 stealth engine: Patchright with a persistent signed-in profile."""
-
     def __init__(self, config: EngineConfig) -> None:
         self._config = config
         self._pw: Any = None
         self._context: Any = None
 
     async def open(self, meeting_url: str) -> Any:
-        # Lazy import: patchright is an optional extra and its browser
-        # binaries are installed out-of-band (uv sync --extra browser).
         from patchright.async_api import async_playwright
 
         self._pw = await async_playwright().start()

@@ -19,11 +19,14 @@ END_POLL_S = 5
 
 NAME_SELECTORS = 'input[aria-label*="nama" i], input[aria-label*="name" i]'
 DEFAULT_LANG = "en"
+WARMUP_URLS = ("https://www.google.com/", "https://meet.google.com/")
+WARMUP_DWELL_S = (1.5, 3.0)
 
 VOCABULARY = {
     "id": {
         "join": ("Minta bergabung", "Gabung sekarang"),
         "tooltip": ("Mengerti",),
+        "dismiss": ("Jangan sekarang",),
         "gate": ("tidak dapat bergabung", "tidak bisa bergabung"),
         "leave": ("tutup panggilan", "tinggalkan", "keluar", "akhiri"),
         "end": ("telah berakhir", "menakhiri", "kamu dikeluarkan"),
@@ -31,6 +34,7 @@ VOCABULARY = {
     "en": {
         "join": ("Ask to join", "Join now"),
         "tooltip": ("Got it",),
+        "dismiss": ("Not now",),
         "gate": ("can't join",),
         "leave": ("leave", "end call"),
         "end": ("meeting ended", "you were removed", "call ended"),
@@ -44,9 +48,23 @@ class JoinError(RuntimeError):
         self.code = code
 
 
-async def join_meeting(page: Any, meeting_url: str, display_name: str) -> None:
-    await _open_prejoin(page, meeting_url)
-    await _fill_name(page, display_name)
+async def join_meeting(
+    page: Any,
+    meeting_url: str,
+    display_name: str,
+    guest: bool = True,
+    warmup: bool = False,
+    pre_knock: Any | None = None,
+) -> None:
+    if warmup:
+        await _warmup_navigation(page)
+    await _open_prejoin(page, meeting_url, guest)
+    if guest:
+        await _fill_name(page, display_name)
+    else:
+        await _settle_signed_in(page)
+    if pre_knock is not None:
+        await pre_knock(page)
     await _knock(page)
 
 
@@ -56,8 +74,9 @@ async def wait_admitted(page: Any, timeout_s: int = ADMISSION_TIMEOUT_S) -> str:
     while asyncio.get_event_loop().time() < deadline:
         if await _leave_button(page) is not None:
             return "admitted"
-        if await _gate_visible(page):
-            raise JoinError("join-gated", "silent rejection after knock")
+        gate = await _gate_visible(page)
+        if gate:
+            raise JoinError("join-gated", f"visible gate text: {gate}")
         if not probed and asyncio.get_event_loop().time() > deadline - timeout_s + 10:
             probed = True
             await _log_button_labels(page)
@@ -79,8 +98,6 @@ async def wait_meeting_ended(
         for end in vocabulary["end"]:
             if await _text_visible(page, end):
                 return "meeting-ended"
-        # The language-independent signal: the leave button vanishing for two
-        # consecutive polls means the meeting (or the bot) left the call.
         if await _leave_button(page) is None:
             leave_misses += 1
             if leave_misses == 1:
@@ -101,25 +118,61 @@ async def leave_meeting(page: Any) -> None:
     await human_click(page, leave)
 
 
-async def _open_prejoin(page: Any, meeting_url: str) -> None:
+async def log_participant_signals(page: Any) -> None:
+    try:
+        signals = await page.eval_on_selector_all(
+            PARTICIPANT_PROBE_SELECTOR,
+            "els => els.map(e => (e.getAttribute('aria-label') || e.textContent || '')"
+            ".trim().slice(0, 60)).filter(Boolean)",
+        )
+        lang = await page.evaluate("() => document.documentElement.lang || ''")
+        logger.info("probe.participants", lang=lang, signals=signals)
+    except Exception as err:
+        logger.warning("probe.participants_failed", error=str(err))
+
+
+PARTICIPANT_PROBE_SELECTOR = (
+    '[aria-label*="peserta" i], [aria-label*="participant" i], '
+    '[aria-label*="orang" i], [data-participant-token]'
+)
+
+
+async def _warmup_navigation(page: Any) -> None:
+    for url in WARMUP_URLS:
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_S * 1000)
+            await asyncio.sleep(random.uniform(*WARMUP_DWELL_S))
+        except Exception:
+            continue
+
+
+async def _open_prejoin(page: Any, meeting_url: str, guest: bool) -> None:
     await page.goto(meeting_url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_S * 1000)
     await asyncio.sleep(random.uniform(*LANDING_DWELL_S))
-    await _dismiss_tooltip(page)
+    await _dismiss_overlays(page)
     await wander(page)
 
-    name_input = page.locator(NAME_SELECTORS).first
-    try:
-        await name_input.wait_for(state="visible", timeout=PREJOIN_TIMEOUT_S * 1000)
-    except Exception as err:
-        if await _gate_visible(page):
-            raise JoinError("join-gated", "gate shown before prejoin") from err
-        raise JoinError("join-prejoin-missing", "prejoin name field never appeared") from err
+    if guest:
+        name_input = page.locator(NAME_SELECTORS).first
+        try:
+            await name_input.wait_for(state="visible", timeout=PREJOIN_TIMEOUT_S * 1000)
+        except Exception as err:
+            gate = await _gate_visible(page)
+            if gate:
+                raise JoinError("join-gated", f"gate before prejoin: {gate}") from err
+            raise JoinError("join-prejoin-missing", "prejoin name field never appeared") from err
 
 
 async def _fill_name(page: Any, display_name: str) -> None:
     name_input = page.locator(NAME_SELECTORS).first
     await human_type(page, name_input, display_name)
     await asyncio.sleep(random.uniform(*KNOCK_SETTLE_S))
+    await wander(page, rounds=random.randint(1, 2))
+
+
+async def _settle_signed_in(page: Any) -> None:
+    await asyncio.sleep(random.uniform(*KNOCK_SETTLE_S))
+    await _dismiss_overlays(page)
     await wander(page, rounds=random.randint(1, 2))
 
 
@@ -139,8 +192,6 @@ async def _leave_button(page: Any) -> Any | None:
     return await first_visible(page, [page.locator(hint).first for hint in hints])
 
 
-# Raw-content matching false-positives: Meet pre-renders hidden error
-# templates in the DOM, so gate/end detection requires VISIBLE text only.
 async def _text_visible(page: Any, text: str) -> bool:
     locator = page.get_by_text(text).first
     try:
@@ -149,12 +200,12 @@ async def _text_visible(page: Any, text: str) -> bool:
         return False
 
 
-async def _gate_visible(page: Any) -> bool:
+async def _gate_visible(page: Any) -> str:
     vocabulary = await _vocabulary(page)
     for gate in vocabulary["gate"]:
         if await _text_visible(page, gate):
-            return True
-    return False
+            return gate
+    return ""
 
 
 async def _log_button_labels(page: Any) -> None:
@@ -169,19 +220,18 @@ async def _log_button_labels(page: Any) -> None:
         pass
 
 
-async def _dismiss_tooltip(page: Any) -> None:
+async def _dismiss_overlays(page: Any) -> None:
     vocabulary = await _vocabulary(page)
-    candidates = [page.get_by_role("button", name=label).first for label in vocabulary["tooltip"]]
-    tooltip = await first_visible(page, candidates)
-    if tooltip is None:
+    labels = (*vocabulary["tooltip"], *vocabulary["dismiss"])
+    candidates = [page.get_by_role("button", name=label).first for label in labels]
+    overlay = await first_visible(page, candidates)
+    if overlay is None:
         return
-    await human_click(page, tooltip)
+    await human_click(page, overlay)
     await asyncio.sleep(random.uniform(*TOOLTIP_SETTLE_S))
 
 
 async def _vocabulary(page: Any) -> dict:
-    # <html lang> lives in the DOM, the one channel the isolated evaluate
-    # world shares with the page — chassis locale never decides this.
     lang = ""
     try:
         lang = str(await page.evaluate("() => document.documentElement.lang || ''"))

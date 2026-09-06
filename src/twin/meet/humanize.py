@@ -1,6 +1,3 @@
-# Ranges from the 2026-09-06 live A/B run: robotic drives get guest knocks
-# silently discarded, human-paced ones get offered to the host. Tune by
-# measurement, never by feel.
 import asyncio
 import random
 from typing import Any
