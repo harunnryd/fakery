@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from redis.asyncio import from_url
 
 from twin.api.routes import router
 from twin.core.config import get_settings
@@ -19,7 +20,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine, session_factory = create_engine_and_sessionmaker(settings.database_url)
     app.state.settings = settings
     app.state.session_factory = session_factory
+    app.state.redis = from_url(settings.redis_url, decode_responses=True)
     yield
+    await app.state.redis.aclose()
     await engine.dispose()
 
 

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from twin.api.deps import get_bot_service
+from twin.api.deps import get_bot_service, get_redis
 from twin.bots.models import BotRun
 from twin.bots.service import BotService
 from twin.main import create_app
@@ -23,9 +23,18 @@ class FakeRepo:
         return self._segments.get(bot_id, [])
 
 
+class FakeRedis:
+    async def xgroup_create(self, *args: object, **kwargs: object) -> bool:
+        return True
+
+    async def xadd(self, *args: object, **kwargs: object) -> str:
+        return "0-0"
+
+
 def _client_with(service: BotService) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_bot_service] = lambda: service
+    app.dependency_overrides[get_redis] = lambda: FakeRedis()
     return TestClient(app)
 
 

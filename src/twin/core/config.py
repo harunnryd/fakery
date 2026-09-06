@@ -23,6 +23,13 @@ class Settings(BaseSettings):
 
     browser_engine: str = "patchright"
     browser_profile_dir: str = "~/.config/twin-profile"
+    browser_headed: bool = True
+    bot_display_name: str = "Fakery Guest"
+    bot_locale: str = "id-ID"
+    bot_timezone: str = "Asia/Jakarta"
+    meeting_max_minutes: int = 45
+    record_audio: bool = True
+    blob_bucket: str = "fakery"
 
 
 @lru_cache

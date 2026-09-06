@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 
-from twin.api.deps import BotServiceDep
+from twin.api.deps import BotServiceDep, RedisDep
 from twin.api.schemas import (
     BotResource,
     CreateBotRequest,
@@ -8,13 +8,17 @@ from twin.api.schemas import (
     TranscriptSegmentResource,
 )
 from twin.bots.models import TranscriptSegment
+from twin.bots.queue import enqueue_run, request_cancel
 
 router = APIRouter(prefix="/v1", tags=["bots"])
 
 
 @router.post("/bots", status_code=status.HTTP_202_ACCEPTED)
-async def create_bot(body: CreateBotRequest, service: BotServiceDep) -> BotResource:
+async def create_bot(
+    body: CreateBotRequest, service: BotServiceDep, redis: RedisDep
+) -> BotResource:
     run = await service.create(meeting_url=str(body.meeting_url), display_name=body.display_name)
+    await enqueue_run(redis, run.id)
     return BotResource.model_validate(run)
 
 
@@ -22,6 +26,13 @@ async def create_bot(body: CreateBotRequest, service: BotServiceDep) -> BotResou
 async def get_bot(bot_id: str, service: BotServiceDep) -> BotResource:
     run = await service.get(bot_id)
     return BotResource.model_validate(run)
+
+
+@router.delete("/bots/{bot_id}", status_code=status.HTTP_202_ACCEPTED)
+async def cancel_bot(bot_id: str, service: BotServiceDep, redis: RedisDep) -> dict:
+    await service.get(bot_id)
+    await request_cancel(redis, bot_id)
+    return {"id": bot_id, "status": "cancelling"}
 
 
 @router.get("/bots/{bot_id}/transcript")
