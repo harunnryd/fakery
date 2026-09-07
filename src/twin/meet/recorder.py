@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -205,8 +206,9 @@ async def audio_track_state(page: Any) -> dict:
 
 
 class MeetingRecorder:
-    def __init__(self, page: Any) -> None:
+    def __init__(self, page: Any, sink: Callable[[bytes], None] | None = None) -> None:
         self._page = page
+        self._sink = sink
         self._buffer = bytearray()
         self._task: asyncio.Task | None = None
         self._drains = 0
@@ -244,4 +246,7 @@ class MeetingRecorder:
         except Exception:
             return
         for chunk in chunks or []:
-            self._buffer += base64.b64decode(chunk)
+            data = base64.b64decode(chunk)
+            self._buffer += data
+            if self._sink is not None:
+                self._sink(data)

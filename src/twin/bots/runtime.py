@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,6 +29,9 @@ from twin.meet.recorder import RECORDER_HOOK, MeetingRecorder, arm_via_cdp_eval
 from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
 from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
+from twin.transcription.decode import decode_webm
+from twin.transcription.transcriber import Segment, Transcriber
+from twin.webhooks.dispatch import EventSink
 
 logger = structlog.get_logger(__name__)
 
@@ -36,6 +40,7 @@ TIER_SIGNED = "signed"
 TIER_GUEST = "guest"
 HEARTBEAT_INTERVAL_S = 30
 PROFILE_CONTENT_TYPE = "application/gzip"
+TRANSCRIBE_DRAIN_S = 120
 
 
 @dataclass(slots=True)
@@ -45,6 +50,8 @@ class RunContext:
     blob: BlobStore | None
     redis: Redis | None
     owner: str = ""
+    transcriber: Transcriber | None = None
+    events: EventSink | None = None
 
 
 @dataclass(slots=True)
@@ -60,7 +67,7 @@ class BotRuntime(Protocol):
 class ProcessRuntime:
     async def spawn(self, bot_id: str, context: RunContext) -> None:
         async with session_scope(context.session_factory) as session:
-            run = await _service(session).get(bot_id)
+            run = await _service(session, context).get(bot_id)
         launch = _prepare_launch(context.settings)
         await attend(
             bot_id,
@@ -123,8 +130,9 @@ def launch_runtime(
             raise ValueError(f"unknown bot runtime: {kind}")
 
 
-def _service(session) -> BotService:
-    return BotService(SqlalchemyBotRepository(session))
+def _service(session, context: RunContext | None = None) -> BotService:
+    events = context.events if context is not None else None
+    return BotService(SqlalchemyBotRepository(session), events=events)
 
 
 def _tier(settings: Settings) -> str:
@@ -161,7 +169,7 @@ async def attend(
     heartbeat: asyncio.Task | None = None
     try:
         async with session_scope(context.session_factory) as session:
-            await _service(session).advance(bot_id, BotStatus.JOINING)
+            await _service(session, context).advance(bot_id, BotStatus.JOINING)
         if context.redis is not None:
             heartbeat = asyncio.create_task(_beat_loop(context.redis, bot_id))
         browser = CloakBrowser(launch.config)
@@ -199,7 +207,7 @@ async def attend(
 
 async def _db_terminal(context: RunContext, bot_id: str) -> bool:
     async with session_scope(context.session_factory) as session:
-        run = await _service(session).get(bot_id)
+        run = await _service(session, context).get(bot_id)
         return BotStatus(run.status) in (BotStatus.COMPLETED, BotStatus.FAILED)
 
 
@@ -232,10 +240,17 @@ async def _attend_and_record(
     await _advance(bot_id, context, BotStatus.RECORDING)
 
     recorder: MeetingRecorder | None = None
+    transcriber = context.transcriber if context.settings.record_audio else None
+    chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+    transcribe_task: asyncio.Task | None = None
     if context.settings.record_audio:
-        recorder = MeetingRecorder(page)
+        recorder = MeetingRecorder(page, sink=chunk_queue.put_nowait)
         await recorder.start()
         asyncio.create_task(_participant_probe(page))
+        if transcriber is not None:
+            transcribe_task = asyncio.create_task(
+                _transcribe_live(bot_id, context, transcriber, _queue_chunks(chunk_queue))
+            )
 
     reason = await join_flow.wait_meeting_ended(
         page,
@@ -245,7 +260,68 @@ async def _attend_and_record(
     logger.info("run.meeting_ended", bot_id=bot_id, reason=reason)
 
     recording = await recorder.stop() if recorder is not None else b""
+    chunk_queue.put_nowait(None)
+    live_count = await _await_transcript(transcribe_task, bot_id)
+    if recording and live_count == 0 and transcriber is not None:
+        await _transcribe_batch(bot_id, context, transcriber, recording)
     return recording, reason
+
+
+async def _queue_chunks(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:
+    while True:
+        chunk = await queue.get()
+        if chunk is None:
+            return
+        yield chunk
+
+
+async def _ingest_segment(bot_id: str, context: RunContext, segment: Segment) -> None:
+    async with session_scope(context.session_factory) as session:
+        await _service(session, context).ingest_segment(
+            bot_id, segment.text, segment.start_ms, segment.end_ms, speaker=segment.speaker
+        )
+
+
+async def _transcribe_live(
+    bot_id: str,
+    context: RunContext,
+    transcriber: Transcriber,
+    chunks: AsyncIterator[bytes],
+) -> int:
+    try:
+        return await transcriber.transcribe_stream(decode_webm(chunks), _live_sink(bot_id, context))
+    except Exception as err:
+        logger.warning("transcribe.live_failed", bot_id=bot_id, error=str(err))
+        return 0
+
+
+def _live_sink(bot_id: str, context: RunContext):
+    async def _sink(segment: Segment) -> None:
+        await _ingest_segment(bot_id, context, segment)
+
+    return _sink
+
+
+async def _await_transcript(task: asyncio.Task | None, bot_id: str) -> int:
+    if task is None:
+        return 0
+    try:
+        return await asyncio.wait_for(task, TRANSCRIBE_DRAIN_S)
+    except TimeoutError as err:
+        logger.warning("transcribe.drain_failed", bot_id=bot_id, error=str(err))
+        return 0
+
+
+async def _transcribe_batch(
+    bot_id: str, context: RunContext, transcriber: Transcriber, recording: bytes
+) -> None:
+    try:
+        segments = await transcriber.transcribe_recording(recording)
+    except Exception as err:
+        logger.warning("transcribe.batch_failed", bot_id=bot_id, error=str(err))
+        return
+    for segment in segments:
+        await _ingest_segment(bot_id, context, segment)
 
 
 async def _participant_probe(page: Any) -> None:
@@ -258,12 +334,12 @@ async def _participant_probe(page: Any) -> None:
 
 async def _advance(bot_id: str, context: RunContext, status: BotStatus) -> None:
     async with session_scope(context.session_factory) as session:
-        await _service(session).advance(bot_id, status)
+        await _service(session, context).advance(bot_id, status)
 
 
 async def _complete(bot_id: str, context: RunContext, recording: bytes, cancelled: bool) -> None:
     async with session_scope(context.session_factory) as session:
-        service = _service(session)
+        service = _service(session, context)
         run = await service.get(bot_id)
         await service.advance(bot_id, BotStatus.PROCESSING)
         if recording:
@@ -294,7 +370,7 @@ async def _capture_gate(page: Any, bot_id: str, blob: BlobStore | None) -> None:
 
 async def fail_run(bot_id: str, context: RunContext, code: str) -> None:
     async with session_scope(context.session_factory) as session:
-        service = _service(session)
+        service = _service(session, context)
         run = await service.get(bot_id)
         if BotStatus(run.status) in (BotStatus.COMPLETED, BotStatus.FAILED):
             return

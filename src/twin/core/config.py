@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     blob_secret_key: str = ""
 
     stt_api_key: str = ""
+    stt_provider: str = "deepgram"
     llm_api_key: str = ""
 
     webhook_signing_secret: str = ""

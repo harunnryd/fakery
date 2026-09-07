@@ -10,6 +10,8 @@ from twin.meet import join_flow
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
 from twin.storage.profiles import validate_key
+from twin.transcription.transcriber import launch_transcriber
+from twin.webhooks.dispatch import WebhookDispatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -32,6 +34,12 @@ async def _run(bot_id: str) -> int:
         blob=blob,
         redis=redis,
         owner=f"job-{bot_id}",
+        transcriber=(
+            launch_transcriber(settings.stt_provider, settings.stt_api_key)
+            if settings.stt_api_key
+            else None
+        ),
+        events=WebhookDispatcher(session_factory, settings.webhook_signing_secret),
     )
     try:
         launch = _prepare_launch(settings)
