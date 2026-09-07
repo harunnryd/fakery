@@ -15,7 +15,7 @@ from twin.core.config import Settings
 from twin.meet import join_flow
 from twin.meet.launcher import CloakBrowser, EngineConfig
 from twin.meet.profile_prep import init_profile_defaults
-from twin.meet.recorder import MeetingRecorder, arm_via_cdp_eval
+from twin.meet.recorder import RECORDER_HOOK, MeetingRecorder, arm_via_cdp_eval
 from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
 
@@ -88,6 +88,7 @@ def _prepare_launch(settings: Settings) -> PreparedLaunch:
         locale=settings.bot_locale,
         timezone=settings.bot_timezone,
         guest=guest,
+        init_scripts=(RECORDER_HOOK,),
     )
     return PreparedLaunch(config=config, warmup=not cookies_db.exists())
 
