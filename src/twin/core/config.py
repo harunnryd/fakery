@@ -21,7 +21,6 @@ class Settings(BaseSettings):
 
     webhook_signing_secret: str = ""
 
-    browser_engine: str = "patchright"
     browser_profile_dir: str = "~/.config/twin-profile"
     browser_guest_profile_dir: str = "~/.config/twin-guest-profile"
     browser_headed: bool = True

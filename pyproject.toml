@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = [
-    "patchright>=1.49",
+    "cloakbrowser==0.5.10",
 ]
 dev = [
     "pytest>=8.2",

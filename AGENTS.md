@@ -25,7 +25,7 @@ just migrate    # alembic upgrade head
 ## Architecture Rules
 
 1. Browser engine is behind `twin.meet.launcher.MeetBrowser`; never
-   import patchright/playwright at call sites (lazy import lives only
+   import cloakbrowser at call sites (lazy import lives only
    in the engine implementation).
 2. Every external capability (STT, LLM, blob store) sits behind a
    Protocol in its own package; no provider SDK imports above that layer.

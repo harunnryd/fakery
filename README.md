@@ -53,7 +53,7 @@ curl -X POST localhost:8000/v1/bots \
 
 - Python 3.12, FastAPI (async), SQLAlchemy 2 + asyncpg, Alembic
 - structlog for logging (JSON in prod, pretty in dev)
-- Patchright (stealth Chromium) for Meet join, behind an engine interface
+- CloakBrowser (stealth Chromium) for Meet join, behind an engine interface
 - Postgres + Redis + S3-compatible blob store (see `deploy/compose/`)
 
 ## Structure

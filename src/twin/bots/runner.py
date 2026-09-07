@@ -13,7 +13,7 @@ from twin.bots.service import BotService, SqlalchemyBotRepository
 from twin.bots.state import BotStatus
 from twin.core.config import Settings
 from twin.meet import join_flow
-from twin.meet.launcher import EngineConfig, PatchrightBrowser
+from twin.meet.launcher import CloakBrowser, EngineConfig
 from twin.meet.profile_prep import init_profile_defaults
 from twin.meet.recorder import MeetingRecorder, arm_via_cdp_eval
 from twin.storage.blob import BlobStore
@@ -47,7 +47,7 @@ async def execute_run(bot_id: str, context: RunContext) -> None:
         await service.advance(bot_id, BotStatus.JOINING)
 
     launch = _prepare_launch(settings)
-    browser = PatchrightBrowser(launch.config)
+    browser = CloakBrowser(launch.config)
     try:
         page = await browser.open(meeting_url)
     except Exception:
