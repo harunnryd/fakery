@@ -27,6 +27,11 @@
   before join fails the run (`cancelled`); cancel mid-run completes it
   with the partial recording and marks `error_code=cancelled` — a user
   stop is not a failure, and the soak harness counts it as success.
+- `[x]` M2 live transcript + webhooks (verified 2026-09-07): Deepgram
+  nova-3 streaming over worker-decoded PCM16, 18 segments queryable
+  mid-meeting, batch fallback quiet when live delivers;
+  `bot.status_changed` + `transcript.segment` webhooks HMAC-signed
+  with retry (one transient failure auto-recovered live).
 
 ## Modules to build (dependency order)
 
@@ -85,12 +90,14 @@ The process that turns a queued bot run into an attended meeting.
 - `[ ]` `AudioSink` playback arrives with the voice module (M5);
   listen-only ships first.
 
-### 4. `transcription/` — first STT provider
-- `[ ]` Streaming provider behind `Transcriber` (multilingual, Indonesian
-  accents are the known risk — pick vendor at build time).
-- `[ ]` Persist `transcript_segments` as they arrive.
-- `[ ]` Batch fallback: post-meeting transcription from the recording
-  when live streaming fails.
+### 4. `transcription/` — first STT provider (shipped, live)
+- `[x]` Streaming provider behind `Transcriber` (Deepgram nova-3,
+  Indonesian; worker decodes Opus/webm chunks to PCM16 mono via
+  ffmpeg first — sliced webm is not directly ingestible).
+- `[x]` Persist `transcript_segments` as they arrive
+  (`service.ingest_segment`, live-readable via API).
+- `[x]` Batch fallback: post-meeting transcription from the recording
+  when live streaming yields nothing.
 
 ### 5. `notes/` — LLM summarizer
 - `[ ]` Implement `Summarizer`: transcript → `MeetingNotes`
@@ -144,11 +151,11 @@ never speaks autonomously — silence is the default state.
   double-join trap impossible by construction.
 - `[ ]` Retention rule: raw audio 30 days, then purge (M4 job).
 
-### 9. `webhooks/` — real delivery
-- `[ ]` `webhook_subscriptions` table + API CRUD (URL per client).
-- `[ ]` Emit `bot.status_changed` on every transition,
-  `transcript.segment` on new segments, `notes.completed` at the end.
-- `[ ]` Delivery retry policy + failure logging.
+### 9. `webhooks/` — real delivery (M2: status + segments)
+- `[x]` `webhook_subscriptions` table + API CRUD (URL per client).
+- `[x]` Emit `bot.status_changed` on every transition,
+  `transcript.segment` on new segments (`notes.completed` waits M3).
+- `[x]` Delivery retry policy + failure logging.
 
 ### 10. `api/` — complete the surface
 - `[ ]` API-key auth (`X-API-Key`, keys seeded via env/config).
