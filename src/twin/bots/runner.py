@@ -61,10 +61,7 @@ async def execute_run(bot_id: str, context: RunContext) -> None:
         await _complete(bot_id, context, recording)
         logger.info("run.completed", bot_id=bot_id, recording_bytes=len(recording))
     except join_flow.JoinError:
-        try:
-            await page.screenshot(path=f"/tmp/fakery_gate_{bot_id}.png")
-        except Exception:
-            pass
+        await _capture_gate(page, bot_id, context.blob)
         raise
     finally:
         await browser.close()
@@ -162,6 +159,21 @@ async def _complete(bot_id: str, context: RunContext, recording: bytes) -> None:
                     f"recordings/{bot_id}.webm", recording, "audio/webm"
                 )
         await service.advance(bot_id, BotStatus.COMPLETED)
+
+
+async def _capture_gate(page: Any, bot_id: str, blob: BlobStore | None) -> None:
+    try:
+        shot = await page.screenshot()
+    except Exception:
+        return
+    if blob is None or not shot:
+        return
+    try:
+        uri = await blob.put(f"gates/{bot_id}.png", bytes(shot), "image/png")
+    except Exception as err:
+        logger.warning("gate.upload_failed", bot_id=bot_id, error=str(err))
+        return
+    logger.info("gate.captured", bot_id=bot_id, uri=uri)
 
 
 async def fail_run(bot_id: str, context: RunContext, code: str) -> None:
