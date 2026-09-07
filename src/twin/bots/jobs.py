@@ -3,6 +3,8 @@ import re
 import time
 from typing import Any, Protocol
 
+from twin.core.time import SECONDS_PER_MINUTE
+
 JOB_NAME_PREFIX = "botrun"
 JOB_MAX_NAME = 63
 JOB_TTL_S = 300
@@ -37,7 +39,7 @@ def build_bot_job(bot_id: str, image: str, namespace: str, meeting_max_minutes: 
         "spec": {
             "backoffLimit": JOB_BACKOFF_LIMIT,
             "ttlSecondsAfterFinished": JOB_TTL_S,
-            "activeDeadlineSeconds": meeting_max_minutes * 60 + JOB_STARTUP_GRACE_S,
+            "activeDeadlineSeconds": meeting_max_minutes * SECONDS_PER_MINUTE + JOB_STARTUP_GRACE_S,
             "template": {
                 "metadata": {"labels": labels},
                 "spec": {

@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
@@ -9,10 +8,9 @@ from twin.bots.jobs import (
     resolve_job_outcome,
 )
 from twin.bots.models import BotRun
-from twin.bots.runtime import JobRuntime, PreparedLaunch, RunContext
+from twin.bots.runtime import JobRuntime, RunContext
 from twin.bots.state import BotStatus
 from twin.core.config import Settings
-from twin.meet.launcher import EngineConfig
 
 
 class FakeJobs:
@@ -152,8 +150,7 @@ async def test_job_spawn_resolves_supervisor_outcome(
     run = _run(db_status)
     context = _context(run)
     runtime = JobRuntime(jobs)
-    launch = PreparedLaunch(config=EngineConfig(profile_dir=Path("/tmp/x")), warmup=False)
-    await runtime.spawn("bot_abc123", "https://meet.google.com/abc-defg-hij", "G", context, launch)
+    await runtime.spawn("bot_abc123", context)
     assert len(jobs.created) == 1
     assert jobs.created[0]["metadata"]["name"] == "botrun-bot-abc123"
     assert jobs.closed is True

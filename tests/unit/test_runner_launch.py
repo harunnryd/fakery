@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from twin.bots.runner import _prepare_launch
+from twin.bots.runtime import _prepare_launch
 from twin.core.config import Settings
 from twin.meet.recorder import RECORDER_HOOK
 

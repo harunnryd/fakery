@@ -4,8 +4,7 @@ import sys
 import structlog
 from redis.asyncio import from_url
 
-from twin.bots.runner import _prepare_launch
-from twin.bots.runtime import RunContext, _service, attend, fail_run
+from twin.bots.runtime import RunContext, _prepare_launch, _service, attend, fail_run
 from twin.core.config import get_settings
 from twin.meet import join_flow
 from twin.storage.blob import MinioBlobStore

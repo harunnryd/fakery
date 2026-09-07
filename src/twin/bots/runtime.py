@@ -20,9 +20,11 @@ from twin.bots.queue import beat, clear_beat, is_cancelled
 from twin.bots.service import BotService, SqlalchemyBotRepository
 from twin.bots.state import BotStatus
 from twin.core.config import Settings
+from twin.core.time import SECONDS_PER_MINUTE
 from twin.meet import join_flow
 from twin.meet.launcher import CloakBrowser, EngineConfig
-from twin.meet.recorder import MeetingRecorder, arm_via_cdp_eval
+from twin.meet.profile_prep import init_profile_defaults
+from twin.meet.recorder import RECORDER_HOOK, MeetingRecorder, arm_via_cdp_eval
 from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
 from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
@@ -52,40 +54,28 @@ class PreparedLaunch:
 
 
 class BotRuntime(Protocol):
-    async def spawn(
-        self,
-        bot_id: str,
-        meeting_url: str,
-        display_name: str,
-        context: RunContext,
-        launch: PreparedLaunch,
-    ) -> None: ...
+    async def spawn(self, bot_id: str, context: RunContext) -> None: ...
 
 
 class ProcessRuntime:
-    async def spawn(
-        self,
-        bot_id: str,
-        meeting_url: str,
-        display_name: str,
-        context: RunContext,
-        launch: PreparedLaunch,
-    ) -> None:
-        await attend(bot_id, meeting_url, display_name, context, launch)
+    async def spawn(self, bot_id: str, context: RunContext) -> None:
+        async with session_scope(context.session_factory) as session:
+            run = await _service(session).get(bot_id)
+        launch = _prepare_launch(context.settings)
+        await attend(
+            bot_id,
+            run.meeting_url,
+            run.display_name or context.settings.bot_display_name,
+            context,
+            launch,
+        )
 
 
 class JobRuntime:
     def __init__(self, jobs: JobClient) -> None:
         self._jobs = jobs
 
-    async def spawn(
-        self,
-        bot_id: str,
-        meeting_url: str,
-        display_name: str,
-        context: RunContext,
-        launch: PreparedLaunch,
-    ) -> None:
+    async def spawn(self, bot_id: str, context: RunContext) -> None:
         settings = context.settings
         namespace = settings.pod_namespace
         name = bot_job_name(bot_id)
@@ -99,7 +89,7 @@ class JobRuntime:
                 )
             )
             logger.info("job.created", bot_id=bot_id, job=name)
-            timeout_s = settings.meeting_max_minutes * 60 + JOB_STARTUP_GRACE_S
+            timeout_s = settings.meeting_max_minutes * SECONDS_PER_MINUTE + JOB_STARTUP_GRACE_S
             result = await self._jobs.wait_terminal(namespace, name, timeout_s)
         finally:
             try:
@@ -135,6 +125,28 @@ def launch_runtime(
 
 def _service(session) -> BotService:
     return BotService(SqlalchemyBotRepository(session))
+
+
+def _tier(settings: Settings) -> str:
+    signed_dir = Path(settings.browser_profile_dir).expanduser()
+    return TIER_SIGNED if signed_dir.exists() else TIER_GUEST
+
+
+def _prepare_launch(settings: Settings) -> PreparedLaunch:
+    signed_dir = Path(settings.browser_profile_dir).expanduser()
+    guest = not signed_dir.exists()
+    profile_dir = signed_dir if not guest else Path(settings.browser_guest_profile_dir).expanduser()
+    cookies_db = profile_dir / "Default" / "Network" / "Cookies"
+    init_profile_defaults(profile_dir)
+    config = EngineConfig(
+        profile_dir=profile_dir,
+        headed=settings.browser_headed,
+        locale=settings.bot_locale,
+        timezone=settings.bot_timezone,
+        guest=guest,
+        init_scripts=(RECORDER_HOOK,),
+    )
+    return PreparedLaunch(config=config, warmup=not cookies_db.exists())
 
 
 async def attend(
@@ -227,7 +239,7 @@ async def _attend_and_record(
 
     reason = await join_flow.wait_meeting_ended(
         page,
-        max_seconds=context.settings.meeting_max_minutes * 60,
+        max_seconds=context.settings.meeting_max_minutes * SECONDS_PER_MINUTE,
         should_stop=_should_stop(context, bot_id) if context.redis is not None else None,
     )
     logger.info("run.meeting_ended", bot_id=bot_id, reason=reason)
@@ -289,6 +301,7 @@ async def fail_run(bot_id: str, context: RunContext, code: str) -> None:
         run.error_code = code
         await service.advance(bot_id, BotStatus.FAILED)
 
+
 def _should_stop(context: RunContext, bot_id: str):
     async def check() -> bool:
         return await is_cancelled(context.redis, bot_id)
@@ -333,5 +346,3 @@ async def _beat_loop(redis: Redis, bot_id: str) -> None:
         except Exception as err:
             logger.warning("run.heartbeat_failed", bot_id=bot_id, error=str(err))
         await asyncio.sleep(HEARTBEAT_INTERVAL_S)
-
-
