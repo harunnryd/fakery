@@ -5,6 +5,7 @@ import pytest
 from twin.bots.models import BotRun, TranscriptSegment
 from twin.bots.service import BotService
 from twin.bots.state import BotStatus
+from twin.transcription.transcriber import Segment
 
 
 class FakeEvents:
@@ -35,6 +36,19 @@ class FakeRepo:
 
     async def add_segment(self, segment: TranscriptSegment) -> None:
         self.saved.append(segment)
+
+    async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
+        count = 0
+        for segment in self.saved:
+            if (
+                segment.bot_run_id == bot_id
+                and segment.speaker is None
+                and segment.start_ms < end_ms
+                and segment.end_ms > start_ms
+            ):
+                segment.speaker = speaker
+                count += 1
+        return count
 
 
 def _service(events: FakeEvents | None = None) -> tuple[BotService, FakeRepo]:
@@ -77,3 +91,27 @@ async def test_ingest_keeps_speaker(speaker: str | None) -> None:
     run = await service.create("https://meet.google.com/abc-defg-hij")
     segment = await service.ingest_segment(run.id, "ok", 0, 500, speaker=speaker)
     assert segment.speaker == speaker
+
+
+async def test_annotate_fills_only_blank_overlapping_segments() -> None:
+    service, _ = _service(None)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    await service.ingest_segment(run.id, "pagi", 1000, 2000)
+    await service.ingest_segment(run.id, "siang", 5000, 6000)
+    await service.ingest_segment(run.id, "sore", 1500, 2500, speaker="9")
+    annotated = await service.annotate_speakers(
+        run.id, [Segment(text="x", start_ms=500, end_ms=2500, speaker="1")]
+    )
+    assert annotated == 1
+    texts = {seg.text: seg.speaker for seg in await service.transcript(run.id)}
+    assert texts == {"pagi": "1", "siang": None, "sore": "9"}
+
+
+async def test_annotate_skips_speakerless_batch() -> None:
+    service, _ = _service(None)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    await service.ingest_segment(run.id, "pagi", 1000, 2000)
+    annotated = await service.annotate_speakers(
+        run.id, [Segment(text="x", start_ms=0, end_ms=3000, speaker=None)]
+    )
+    assert annotated == 0

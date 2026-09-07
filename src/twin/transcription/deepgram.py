@@ -9,27 +9,32 @@ STREAM_LANGUAGE = "id"
 STREAM_ENCODING = "linear16"
 STREAM_SAMPLE_RATE = 16000
 STREAM_CHANNELS = 1
+DIARIZE_MODEL = "latest"
 
 
 class DeepgramTranscriber:
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, diarize: bool = True) -> None:
         self._api_key = api_key
+        self._diarize = diarize
 
     async def transcribe_stream(self, audio: AsyncIterator[bytes], sink: SegmentSink) -> int:
         from deepgram import AsyncDeepgramClient
 
         client = AsyncDeepgramClient(api_key=self._api_key)
+        options = {
+            "model": STREAM_MODEL,
+            "language": STREAM_LANGUAGE,
+            "encoding": STREAM_ENCODING,
+            "sample_rate": STREAM_SAMPLE_RATE,
+            "channels": STREAM_CHANNELS,
+            "interim_results": True,
+            "smart_format": True,
+            "punctuate": True,
+        }
+        if self._diarize:
+            options["diarize_model"] = DIARIZE_MODEL
         finals = 0
-        async with client.listen.v1.connect(
-            model=STREAM_MODEL,
-            language=STREAM_LANGUAGE,
-            encoding=STREAM_ENCODING,
-            sample_rate=STREAM_SAMPLE_RATE,
-            channels=STREAM_CHANNELS,
-            interim_results=True,
-            smart_format=True,
-            punctuate=True,
-        ) as socket:
+        async with client.listen.v1.connect(**options) as socket:
             feed = asyncio.create_task(_feed(socket, audio))
             try:
                 async for message in socket:
@@ -48,13 +53,15 @@ class DeepgramTranscriber:
         from deepgram import AsyncDeepgramClient
 
         client = AsyncDeepgramClient(api_key=self._api_key)
-        response = await client.listen.v1.media.transcribe_file(
-            request=audio,
-            model=STREAM_MODEL,
-            language=STREAM_LANGUAGE,
-            smart_format=True,
-            punctuate=True,
-        )
+        options = {
+            "model": STREAM_MODEL,
+            "language": STREAM_LANGUAGE,
+            "smart_format": True,
+            "punctuate": True,
+        }
+        if self._diarize:
+            options["diarize_model"] = DIARIZE_MODEL
+        response = await client.listen.v1.media.transcribe_file(request=audio, **options)
         return prerecorded_segments(response)
 
 

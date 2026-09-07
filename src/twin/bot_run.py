@@ -35,7 +35,7 @@ async def _run(bot_id: str) -> int:
         redis=redis,
         owner=f"job-{bot_id}",
         transcriber=(
-            launch_transcriber(settings.stt_provider, settings.stt_api_key)
+            launch_transcriber(settings.stt_provider, settings.stt_api_key, settings.stt_diarize)
             if settings.stt_api_key
             else None
         ),

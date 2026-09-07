@@ -10,6 +10,7 @@ from twin.bots.models import BotRun, TranscriptSegment, WebhookSubscription
 from twin.bots.state import BotStatus, require_transition
 from twin.core.errors import make_error
 from twin.core.time import utcnow
+from twin.transcription.transcriber import Segment
 from twin.webhooks.dispatch import EventSink
 
 
@@ -21,6 +22,10 @@ class BotRepository(Protocol):
     async def segments(self, bot_id: str) -> list[TranscriptSegment]: ...
 
     async def add_segment(self, segment: TranscriptSegment) -> None: ...
+
+    async def annotate_speakers(
+        self, bot_id: str, start_ms: int, end_ms: int, speaker: str
+    ) -> int: ...
 
 
 class SqlalchemyBotRepository:
@@ -45,6 +50,22 @@ class SqlalchemyBotRepository:
     async def add_segment(self, segment: TranscriptSegment) -> None:
         self._session.add(segment)
         await self._session.commit()
+
+    async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
+        rows = await self._session.execute(
+            select(TranscriptSegment).where(
+                TranscriptSegment.bot_run_id == bot_id,
+                TranscriptSegment.speaker.is_(None),
+                TranscriptSegment.start_ms < end_ms,
+                TranscriptSegment.end_ms > start_ms,
+            )
+        )
+        count = 0
+        for segment in list(rows.scalars()):
+            segment.speaker = speaker
+            count += 1
+        await self._session.commit()
+        return count
 
 
 class SubscriptionRepository(Protocol):
@@ -157,6 +178,16 @@ class BotService:
         if self._events is not None:
             await self._events.transcript_segment(segment)
         return segment
+
+    async def annotate_speakers(self, bot_id: str, segments: list[Segment]) -> int:
+        annotated = 0
+        for segment in segments:
+            if segment.speaker is None:
+                continue
+            annotated += await self._repo.annotate_speakers(
+                bot_id, segment.start_ms, segment.end_ms, segment.speaker
+            )
+        return annotated
 
     async def advance(self, bot_id: str, target: BotStatus) -> BotRun:
         run = await self.get(bot_id)

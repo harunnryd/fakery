@@ -41,6 +41,7 @@ TIER_GUEST = "guest"
 HEARTBEAT_INTERVAL_S = 30
 PROFILE_CONTENT_TYPE = "application/gzip"
 TRANSCRIBE_DRAIN_S = 120
+SPEAKER_MIN_SHARE = 0.15
 
 
 @dataclass(slots=True)
@@ -262,8 +263,11 @@ async def _attend_and_record(
     recording = await recorder.stop() if recorder is not None else b""
     chunk_queue.put_nowait(None)
     live_count = await _await_transcript(transcribe_task, bot_id)
-    if recording and live_count == 0 and transcriber is not None:
-        await _transcribe_batch(bot_id, context, transcriber, recording)
+    if recording and transcriber is not None:
+        if live_count == 0:
+            await _transcribe_batch(bot_id, context, transcriber, recording)
+        elif context.settings.stt_diarize:
+            await _annotate_transcript(bot_id, context, transcriber, recording)
     return recording, reason
 
 
@@ -322,6 +326,36 @@ async def _transcribe_batch(
         return
     for segment in segments:
         await _ingest_segment(bot_id, context, segment)
+
+
+async def _annotate_transcript(
+    bot_id: str, context: RunContext, transcriber: Transcriber, recording: bytes
+) -> None:
+    try:
+        segments = await transcriber.transcribe_recording(recording)
+    except Exception as err:
+        logger.warning("transcribe.batch_failed", bot_id=bot_id, error=str(err))
+        return
+    if not _confident_split(segments):
+        logger.info("transcribe.split_uncertain", bot_id=bot_id)
+        return
+    async with session_scope(context.session_factory) as session:
+        annotated = await _service(session, context).annotate_speakers(bot_id, segments)
+    logger.info("transcribe.annotated", bot_id=bot_id, segments=annotated)
+
+
+def _confident_split(segments: list[Segment]) -> bool:
+    durations: dict[str, int] = {}
+    for segment in segments:
+        if segment.speaker is None:
+            continue
+        durations[segment.speaker] = (
+            durations.get(segment.speaker, 0) + segment.end_ms - segment.start_ms
+        )
+    if len(durations) < 2:
+        return False
+    total = sum(durations.values())
+    return min(durations.values()) / total >= SPEAKER_MIN_SHARE
 
 
 async def _participant_probe(page: Any) -> None:

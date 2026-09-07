@@ -10,8 +10,8 @@ from twin.transcription.transcriber import (
 )
 
 
-def _word(start: float, end: float) -> SimpleNamespace:
-    return SimpleNamespace(start=start, end=end)
+def _word(start: float, end: float, speaker: int | None = None) -> SimpleNamespace:
+    return SimpleNamespace(start=start, end=end, speaker=speaker)
 
 
 def _live(text: str, words: list, final: bool) -> SimpleNamespace:
@@ -103,6 +103,70 @@ def _prerecorded(sentences: list | None, transcript: str) -> SimpleNamespace:
 def test_prerecorded_segments(response: object, expected: list) -> None:
     segments = prerecorded_segments(response)
     assert [(s.text, s.start_ms, s.end_ms) for s in segments] == expected
+
+
+def _ranged_word(text: str, start: float, end: float, speaker: int | None) -> SimpleNamespace:
+    return SimpleNamespace(word=text, start=start, end=end, speaker=speaker)
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        (
+            [_word(0.0, 1.0, 0), _word(1.0, 2.0, 0), _word(2.0, 3.0, 1)],
+            ("halo", 0, 3000, "0"),
+        ),
+        ([_word(0.0, 1.0, 1), _word(1.0, 2.0, 1)], ("halo", 0, 2000, "1")),
+        ([_word(0.0, 1.0, 0), _word(1.0, 2.0, 1)], ("halo", 0, 2000, "0")),
+        ([_word(0.0, 1.0, None)], ("halo", 0, 1000, None)),
+    ],
+    ids=["majority", "unanimous", "tie-earliest", "unlabeled"],
+)
+def test_live_segment_votes_speaker(words: list, expected: tuple) -> None:
+    message = SimpleNamespace(
+        channel=SimpleNamespace(alternatives=[SimpleNamespace(transcript="halo", words=words)]),
+        start=0.0,
+        duration=3.0,
+        is_final=True,
+        speech_final=False,
+    )
+    segment = live_segment(message)
+    assert segment is not None
+    text, start_ms, end_ms, speaker = expected
+    assert (segment.text, segment.start_ms, segment.end_ms, segment.speaker) == (
+        text,
+        start_ms,
+        end_ms,
+        speaker,
+    )
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        (
+            [_ranged_word("halo", 1.0, 1.5, 1), _ranged_word("tim", 1.5, 2.5, 1)],
+            "1",
+        ),
+        (
+            [_ranged_word("halo", 1.0, 2.0, 0), _ranged_word("tim", 2.0, 2.8, 1)],
+            "0",
+        ),
+        ([_ranged_word("jauh", 9.0, 9.5, 1)], None),
+        ([_ranged_word("bisu", 1.0, 1.5, None)], None),
+    ],
+    ids=["unanimous", "tie-earliest", "outside-range", "unlabeled"],
+)
+def test_prerecorded_assigns_sentence_speaker_from_words(words: list, expected: str | None) -> None:
+    sentence = SimpleNamespace(text="halo tim", start=1.0, end=3.0)
+    paragraphs = SimpleNamespace(paragraphs=[SimpleNamespace(sentences=[sentence])])
+    alternative = SimpleNamespace(transcript="halo tim", paragraphs=paragraphs, words=words)
+    response = SimpleNamespace(
+        results=SimpleNamespace(channels=[SimpleNamespace(alternatives=[alternative])])
+    )
+    segments = prerecorded_segments(response)
+    assert len(segments) == 1
+    assert segments[0].speaker == expected
 
 
 def test_ffmpeg_argv_decodes_to_mono_pcm() -> None:

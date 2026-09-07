@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     stt_api_key: str = ""
     stt_provider: str = "deepgram"
+    stt_diarize: bool = True
     llm_api_key: str = ""
 
     webhook_signing_secret: str = ""

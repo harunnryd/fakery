@@ -33,3 +33,22 @@ The image gains ffmpeg. Subscription rows live in Postgres
 (`webhook_subscriptions` + API CRUD). Delivery is at-least-once per
 attempt, best-effort overall — a durable outbox is deferred until a
 miss is observed, not built on speculation.
+
+## Addendum 2026-09-07 — speaker labels
+
+Measured on a real multi-voice standup recording: streaming
+diarization collapses every voice to one label, batch separates two
+but leaves sparse turns mislabeled. So live transcription stays
+text-only (`speaker` NULL means unknown, never a guessed zero), and
+the post-meeting batch pass fills speakers only when the split is
+confident (two or more voices, minority share at least 15% of speech
+time) — the system admits uncertainty by construction.
+
+## Addendum 2026-09-07 — roster names, LMA lane
+
+Names come from the platform, never from voice guessing, following
+LMA (channels, then vendor diarization, then roster overrides) —
+not from caption scraping. Our guest bot cannot split channels, so
+the deterministic roster layer is the Meet active-speaker tile
+(name plus timestamp, polled like every other recipe and
+re-derived live), cross-checked against ML numbers by time overlap.

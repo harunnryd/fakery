@@ -32,7 +32,7 @@ def _transcriber(settings: Settings) -> Transcriber | None:
     if not settings.stt_api_key:
         logger.warning("worker.stt_disabled", reason="no-key")
         return None
-    return launch_transcriber(settings.stt_provider, settings.stt_api_key)
+    return launch_transcriber(settings.stt_provider, settings.stt_api_key, settings.stt_diarize)
 
 
 async def main() -> None:
