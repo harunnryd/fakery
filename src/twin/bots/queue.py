@@ -10,6 +10,8 @@ ORPHAN_IDLE_MS = 300_000
 CLAIM_BLOCK_MS = 5_000
 CANCEL_KEY = "bots:cancel:{bot_id}"
 CANCEL_TTL_S = 3_600
+LEASE_TTL_S = 3_600
+HEARTBEAT_TTL_S = 90
 
 
 async def request_cancel(redis: Redis, bot_id: str) -> None:
@@ -18,6 +20,31 @@ async def request_cancel(redis: Redis, bot_id: str) -> None:
 
 async def is_cancelled(redis: Redis, bot_id: str) -> bool:
     return bool(await redis.get(CANCEL_KEY.format(bot_id=bot_id)))
+
+
+def lease_key(tenant: str, platform: str, tier: str) -> str:
+    return f"profiles:lease:{tenant}:{platform}:{tier}"
+
+
+async def acquire_lease(redis: Redis, name: str, owner: str, ttl_s: int = LEASE_TTL_S) -> bool:
+    return bool(await redis.set(name, owner, ex=ttl_s, nx=True))
+
+
+async def release_lease(redis: Redis, name: str, owner: str) -> None:
+    if await redis.get(name) == owner:
+        await redis.delete(name)
+
+
+def heartbeat_key(bot_id: str) -> str:
+    return f"bots:hb:{bot_id}"
+
+
+async def beat(redis: Redis, bot_id: str, ttl_s: int = HEARTBEAT_TTL_S) -> None:
+    await redis.set(heartbeat_key(bot_id), "1", ex=ttl_s)
+
+
+async def clear_beat(redis: Redis, bot_id: str) -> None:
+    await redis.delete(heartbeat_key(bot_id))
 
 
 async def ensure_group(redis: Redis) -> None:

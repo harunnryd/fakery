@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     env: str = "dev"
     log_level: str = "INFO"
+    tenant: str = "default"
 
     database_url: str = "postgresql+asyncpg://twin:twin@localhost:5432/twin"
     redis_url: str = "redis://localhost:6379/0"
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     meeting_max_minutes: int = 45
     record_audio: bool = True
     blob_bucket: str = "fakery"
+    profile_encryption_key: str = ""
 
 
 @lru_cache

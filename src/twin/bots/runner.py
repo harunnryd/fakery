@@ -8,7 +8,14 @@ import structlog
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from twin.bots.queue import is_cancelled
+from twin.bots.queue import (
+    acquire_lease,
+    beat,
+    clear_beat,
+    is_cancelled,
+    lease_key,
+    release_lease,
+)
 from twin.bots.service import BotService, SqlalchemyBotRepository
 from twin.bots.state import BotStatus
 from twin.core.config import Settings
@@ -18,8 +25,15 @@ from twin.meet.profile_prep import init_profile_defaults
 from twin.meet.recorder import RECORDER_HOOK, MeetingRecorder, arm_via_cdp_eval
 from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
+from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
 
 logger = structlog.get_logger(__name__)
+
+PLATFORM_MEET = "meet"
+TIER_SIGNED = "signed"
+TIER_GUEST = "guest"
+HEARTBEAT_INTERVAL_S = 30
+PROFILE_CONTENT_TYPE = "application/gzip"
 
 
 @dataclass(slots=True)
@@ -28,6 +42,7 @@ class RunContext:
     settings: Settings
     blob: BlobStore | None
     redis: Redis | None
+    owner: str = ""
 
 
 def _service(session) -> BotService:
@@ -44,27 +59,57 @@ async def execute_run(bot_id: str, context: RunContext) -> None:
         if context.redis is not None and await is_cancelled(context.redis, bot_id):
             await fail_run(bot_id, context, "cancelled")
             return
-        await service.advance(bot_id, BotStatus.JOINING)
 
     launch = _prepare_launch(settings)
-    browser = CloakBrowser(launch.config)
+    tier = TIER_GUEST if launch.config.guest else TIER_SIGNED
+    profile_dir = launch.config.profile_dir
+    lease = lease_key(settings.tenant, PLATFORM_MEET, tier)
+    if context.redis is not None and not await acquire_lease(context.redis, lease, context.owner):
+        await fail_run(bot_id, context, "profile-busy")
+        return
+    await _restore_profile(context, tier, profile_dir)
+    heartbeat: asyncio.Task | None = None
     try:
-        page = await browser.open(meeting_url)
-    except Exception:
-        await browser.close()
-        raise
-    try:
-        recording = await _attend_and_record(
-            page, bot_id, context, meeting_url, display_name, launch
-        )
-        await join_flow.leave_meeting(page)
-        await _complete(bot_id, context, recording)
-        logger.info("run.completed", bot_id=bot_id, recording_bytes=len(recording))
-    except join_flow.JoinError:
-        await _capture_gate(page, bot_id, context.blob)
-        raise
+        async with session_scope(context.session_factory) as session:
+            await _service(session).advance(bot_id, BotStatus.JOINING)
+        if context.redis is not None:
+            heartbeat = asyncio.create_task(_beat_loop(context.redis, bot_id))
+        browser = CloakBrowser(launch.config)
+        try:
+            page = await browser.open(meeting_url)
+        except Exception:
+            await browser.close()
+            raise
+        try:
+            recording = await _attend_and_record(
+                page, bot_id, context, meeting_url, display_name, launch
+            )
+            await join_flow.leave_meeting(page)
+            await _complete(bot_id, context, recording)
+            logger.info("run.completed", bot_id=bot_id, recording_bytes=len(recording))
+        except join_flow.JoinError:
+            await _capture_gate(page, bot_id, context.blob)
+            raise
+        finally:
+            await browser.close()
     finally:
-        await browser.close()
+        if heartbeat is not None:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+        if context.redis is not None:
+            try:
+                await clear_beat(context.redis, bot_id)
+            except Exception as err:
+                logger.warning("run.beat_clear_failed", bot_id=bot_id, error=str(err))
+        await _persist_profile(context, tier, profile_dir)
+        if context.redis is not None:
+            try:
+                await release_lease(context.redis, lease, context.owner)
+            except Exception as err:
+                logger.warning("run.lease_release_failed", bot_id=bot_id, error=str(err))
 
 
 @dataclass(slots=True)
@@ -174,6 +219,45 @@ async def _capture_gate(page: Any, bot_id: str, blob: BlobStore | None) -> None:
         logger.warning("gate.upload_failed", bot_id=bot_id, error=str(err))
         return
     logger.info("gate.captured", bot_id=bot_id, uri=uri)
+
+
+def _missing_blob_key(err: Exception) -> bool:
+    return getattr(err, "code", "") == "NoSuchKey"
+
+
+async def _restore_profile(context: RunContext, tier: str, profile_dir: Path) -> None:
+    if context.blob is None:
+        logger.warning("profile.restore_skipped", reason="no-blob")
+        return
+    key = profile_key(context.settings.tenant, PLATFORM_MEET, tier)
+    try:
+        data = await context.blob.get(key)
+    except Exception as err:
+        if _missing_blob_key(err):
+            return
+        logger.warning("profile.restore_failed", error=str(err))
+        return
+    unpack_profile(unseal(data, context.settings.profile_encryption_key or None), profile_dir)
+
+
+async def _persist_profile(context: RunContext, tier: str, profile_dir: Path) -> None:
+    if context.blob is None:
+        return
+    key = profile_key(context.settings.tenant, PLATFORM_MEET, tier)
+    try:
+        sealed = seal(pack_profile(profile_dir), context.settings.profile_encryption_key or None)
+        await context.blob.put(key, sealed, PROFILE_CONTENT_TYPE)
+    except Exception as err:
+        logger.warning("profile.persist_failed", error=str(err))
+
+
+async def _beat_loop(redis: Redis, bot_id: str) -> None:
+    while True:
+        try:
+            await beat(redis, bot_id)
+        except Exception as err:
+            logger.warning("run.heartbeat_failed", bot_id=bot_id, error=str(err))
+        await asyncio.sleep(HEARTBEAT_INTERVAL_S)
 
 
 async def fail_run(bot_id: str, context: RunContext, code: str) -> None:

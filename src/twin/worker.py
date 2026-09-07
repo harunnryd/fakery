@@ -11,6 +11,7 @@ from twin.bots.runner import RunContext, execute_run, fail_run
 from twin.core.config import get_settings
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
+from twin.storage.profiles import validate_key
 
 CONSUMER = f"worker-{os.getpid()}"
 ANTI_CHURN_GUEST_GAP_S = 240
@@ -24,6 +25,8 @@ def _error_code(err: Exception) -> str:
 
 async def main() -> None:
     settings = get_settings()
+    if settings.profile_encryption_key:
+        validate_key(settings.profile_encryption_key)
     engine, session_factory = create_engine_and_sessionmaker(settings.database_url)
     redis = from_url(settings.redis_url, decode_responses=True)
     blob = MinioBlobStore(
@@ -32,7 +35,13 @@ async def main() -> None:
         settings.blob_secret_key,
         settings.blob_bucket,
     )
-    context = RunContext(session_factory=session_factory, settings=settings, blob=blob, redis=redis)
+    context = RunContext(
+        session_factory=session_factory,
+        settings=settings,
+        blob=blob,
+        redis=redis,
+        owner=CONSUMER,
+    )
     guest_tier = not Path(settings.browser_profile_dir).expanduser().exists()
     await ensure_group(redis)
     logger.info("worker.started", consumer=CONSUMER, guest_tier=guest_tier)
