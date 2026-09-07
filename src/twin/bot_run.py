@@ -4,14 +4,12 @@ import sys
 import structlog
 from redis.asyncio import from_url
 
-from twin.bots.runtime import RunContext, _prepare_launch, _service, attend, fail_run
+from twin.bots.runtime import _prepare_launch, _service, attend, build_context, fail_run
 from twin.core.config import get_settings
 from twin.meet import join_flow
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
 from twin.storage.profiles import validate_key
-from twin.transcription.transcriber import launch_transcriber
-from twin.webhooks.dispatch import WebhookDispatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -28,19 +26,7 @@ async def _run(bot_id: str) -> int:
         settings.blob_secret_key,
         settings.blob_bucket,
     )
-    context = RunContext(
-        session_factory=session_factory,
-        settings=settings,
-        blob=blob,
-        redis=redis,
-        owner=f"job-{bot_id}",
-        transcriber=(
-            launch_transcriber(settings.stt_provider, settings.stt_api_key, settings.stt_diarize)
-            if settings.stt_api_key
-            else None
-        ),
-        events=WebhookDispatcher(session_factory, settings.webhook_signing_secret),
-    )
+    context = build_context(session_factory, settings, blob, redis, f"job-{bot_id}")
     try:
         launch = _prepare_launch(settings)
         async with context.session_factory() as session:

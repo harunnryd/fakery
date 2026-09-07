@@ -23,10 +23,10 @@ class FakeJobs:
     async def create_job(self, manifest: dict) -> None:
         self.created.append(manifest)
 
-    async def wait_terminal(self, namespace: str, name: str, timeout_s: int) -> str:
+    async def wait_terminal(self, name: str, timeout_s: int) -> str:
         return self.result
 
-    async def delete_job(self, namespace: str, name: str) -> None:
+    async def delete_job(self, name: str) -> None:
         self.deleted.append(name)
 
     async def aclose(self) -> None:

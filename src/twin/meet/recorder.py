@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -192,10 +191,6 @@ async def diagnostics(page: Any) -> dict:
         if raw:
             results[frame.url.rsplit("/", 1)[-1] or "main"] = raw
     return results
-
-
-def summarize(diag: dict) -> str:
-    return json.dumps(diag, sort_keys=True)
 
 
 async def audio_track_state(page: Any) -> dict:

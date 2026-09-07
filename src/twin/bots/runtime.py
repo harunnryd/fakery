@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -30,8 +31,8 @@ from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
 from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
 from twin.transcription.decode import decode_webm
-from twin.transcription.transcriber import Segment, Transcriber
-from twin.webhooks.dispatch import EventSink
+from twin.transcription.transcriber import Segment, Transcriber, launch_transcriber
+from twin.webhooks.dispatch import EventSink, WebhookDispatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -98,7 +99,7 @@ class JobRuntime:
             )
             logger.info("job.created", bot_id=bot_id, job=name)
             timeout_s = settings.meeting_max_minutes * SECONDS_PER_MINUTE + JOB_STARTUP_GRACE_S
-            result = await self._jobs.wait_terminal(namespace, name, timeout_s)
+            result = await self._jobs.wait_terminal(name, timeout_s)
         finally:
             try:
                 await self._jobs.aclose()
@@ -106,7 +107,7 @@ class JobRuntime:
                 logger.warning("job.close_failed", bot_id=bot_id, error=str(err))
         if result == "timeout":
             try:
-                await self._jobs.delete_job(namespace, name)
+                await self._jobs.delete_job(name)
             except Exception as err:
                 logger.warning("job.delete_failed", bot_id=bot_id, error=str(err))
             await fail_run(bot_id, context, "job-timeout")
@@ -134,6 +135,31 @@ def launch_runtime(
 def _service(session, context: RunContext | None = None) -> BotService:
     events = context.events if context is not None else None
     return BotService(SqlalchemyBotRepository(session), events=events)
+
+
+def build_context(
+    session_factory: async_sessionmaker,
+    settings: Settings,
+    blob: BlobStore | None,
+    redis: Redis | None,
+    owner: str,
+) -> RunContext:
+    return RunContext(
+        session_factory=session_factory,
+        settings=settings,
+        blob=blob,
+        redis=redis,
+        owner=owner,
+        transcriber=_transcriber(settings),
+        events=WebhookDispatcher(session_factory, settings.webhook_signing_secret),
+    )
+
+
+def _transcriber(settings: Settings) -> Transcriber | None:
+    if not settings.stt_api_key:
+        logger.warning("run.stt_disabled", reason="no-key")
+        return None
+    return launch_transcriber(settings.stt_provider, settings.stt_api_key, settings.stt_diarize)
 
 
 def _tier(settings: Settings) -> str:
@@ -293,17 +319,12 @@ async def _transcribe_live(
     chunks: AsyncIterator[bytes],
 ) -> int:
     try:
-        return await transcriber.transcribe_stream(decode_webm(chunks), _live_sink(bot_id, context))
+        return await transcriber.transcribe_stream(
+            decode_webm(chunks), partial(_ingest_segment, bot_id, context)
+        )
     except Exception as err:
         logger.warning("transcribe.live_failed", bot_id=bot_id, error=str(err))
         return 0
-
-
-def _live_sink(bot_id: str, context: RunContext):
-    async def _sink(segment: Segment) -> None:
-        await _ingest_segment(bot_id, context, segment)
-
-    return _sink
 
 
 async def _await_transcript(task: asyncio.Task | None, bot_id: str) -> int:

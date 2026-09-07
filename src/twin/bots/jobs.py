@@ -77,9 +77,9 @@ def resolve_job_outcome(job_result: str, db_terminal: bool) -> str | None:
 class JobClient(Protocol):
     async def create_job(self, manifest: dict[str, Any]) -> None: ...
 
-    async def wait_terminal(self, namespace: str, name: str, timeout_s: int) -> str: ...
+    async def wait_terminal(self, name: str, timeout_s: int) -> str: ...
 
-    async def delete_job(self, namespace: str, name: str) -> None: ...
+    async def delete_job(self, name: str) -> None: ...
 
     async def aclose(self) -> None: ...
 
@@ -112,14 +112,14 @@ class K8sJobClient:
         api = await self._batch()
         await api.create_namespaced_job(self._namespace, manifest)
 
-    async def wait_terminal(self, namespace: str, name: str, timeout_s: int) -> str:
+    async def wait_terminal(self, name: str, timeout_s: int) -> str:
         from kubernetes_asyncio.client import ApiException
 
         api = await self._batch()
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             try:
-                job = await api.read_namespaced_job_status(name, namespace)
+                job = await api.read_namespaced_job_status(name, self._namespace)
             except ApiException as err:
                 if err.status == 404:
                     return "failed"
@@ -131,6 +131,6 @@ class K8sJobClient:
             await asyncio.sleep(JOB_POLL_S)
         return "timeout"
 
-    async def delete_job(self, namespace: str, name: str) -> None:
+    async def delete_job(self, name: str) -> None:
         api = await self._batch()
-        await api.delete_namespaced_job(name, namespace)
+        await api.delete_namespaced_job(name, self._namespace)

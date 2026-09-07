@@ -8,13 +8,11 @@ from redis.asyncio import from_url
 
 from twin.bots.queue import ack_run, claim_run, ensure_group, reclaim_stale
 from twin.bots.runner import execute_run, sweep_orphans
-from twin.bots.runtime import RunContext, fail_run
-from twin.core.config import Settings, get_settings
+from twin.bots.runtime import build_context, fail_run
+from twin.core.config import get_settings
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
 from twin.storage.profiles import validate_key
-from twin.transcription.transcriber import Transcriber, launch_transcriber
-from twin.webhooks.dispatch import WebhookDispatcher
 
 CONSUMER = f"worker-{os.getpid()}"
 ANTI_CHURN_GUEST_GAP_S = 240
@@ -26,13 +24,6 @@ logger = structlog.get_logger(__name__)
 def _error_code(err: Exception) -> str:
     code = getattr(err, "code", None)
     return str(code) if code else "internal"
-
-
-def _transcriber(settings: Settings) -> Transcriber | None:
-    if not settings.stt_api_key:
-        logger.warning("worker.stt_disabled", reason="no-key")
-        return None
-    return launch_transcriber(settings.stt_provider, settings.stt_api_key, settings.stt_diarize)
 
 
 async def main() -> None:
@@ -47,15 +38,7 @@ async def main() -> None:
         settings.blob_secret_key,
         settings.blob_bucket,
     )
-    context = RunContext(
-        session_factory=session_factory,
-        settings=settings,
-        blob=blob,
-        redis=redis,
-        owner=CONSUMER,
-        transcriber=_transcriber(settings),
-        events=WebhookDispatcher(session_factory, settings.webhook_signing_secret),
-    )
+    context = build_context(session_factory, settings, blob, redis, CONSUMER)
     guest_tier = not Path(settings.browser_profile_dir).expanduser().exists()
     await ensure_group(redis)
     logger.info("worker.started", consumer=CONSUMER, guest_tier=guest_tier)
