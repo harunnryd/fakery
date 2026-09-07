@@ -86,11 +86,11 @@ async def execute_run(bot_id: str, context: RunContext) -> None:
             await browser.close()
             raise
         try:
-            recording = await _attend_and_record(
+            recording, reason = await _attend_and_record(
                 page, bot_id, context, meeting_url, display_name, launch
             )
             await join_flow.leave_meeting(page)
-            await _complete(bot_id, context, recording)
+            await _complete(bot_id, context, recording, cancelled=reason == join_flow.END_CANCELLED)
             logger.info("run.completed", bot_id=bot_id, recording_bytes=len(recording))
         except join_flow.JoinError:
             await _capture_gate(page, bot_id, context.blob)
@@ -147,7 +147,7 @@ async def _attend_and_record(
     meeting_url: str,
     display_name: str,
     launch: PreparedLaunch,
-) -> bytes:
+) -> tuple[bytes, str]:
     pre_knock = None
     if context.settings.record_audio:
 
@@ -181,7 +181,8 @@ async def _attend_and_record(
     )
     logger.info("run.meeting_ended", bot_id=bot_id, reason=reason)
 
-    return await recorder.stop() if recorder is not None else b""
+    recording = await recorder.stop() if recorder is not None else b""
+    return recording, reason
 
 
 async def _participant_probe(page: Any) -> None:
@@ -197,7 +198,7 @@ async def _advance(bot_id: str, context: RunContext, status: BotStatus) -> None:
         await _service(session).advance(bot_id, status)
 
 
-async def _complete(bot_id: str, context: RunContext, recording: bytes) -> None:
+async def _complete(bot_id: str, context: RunContext, recording: bytes, cancelled: bool) -> None:
     async with session_scope(context.session_factory) as session:
         service = _service(session)
         run = await service.get(bot_id)
@@ -208,6 +209,8 @@ async def _complete(bot_id: str, context: RunContext, recording: bytes) -> None:
                 run.recording_uri = await context.blob.put(
                     f"recordings/{bot_id}.webm", recording, "audio/webm"
                 )
+        if cancelled:
+            run.error_code = "cancelled"
         await service.advance(bot_id, BotStatus.COMPLETED)
 
 

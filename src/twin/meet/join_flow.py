@@ -18,6 +18,7 @@ ADMISSION_POLL_S = 2
 END_POLL_S = 5
 
 NAME_SELECTORS = 'input[aria-label*="nama" i], input[aria-label*="name" i]'
+END_CANCELLED = "cancelled"
 DEFAULT_LANG = "en"
 WARMUP_URLS = ("https://www.google.com/", "https://meet.google.com/")
 WARMUP_DWELL_S = (1.5, 3.0)
@@ -93,7 +94,7 @@ async def wait_meeting_ended(
     leave_misses = 0
     while asyncio.get_event_loop().time() < deadline:
         if should_stop is not None and await should_stop():
-            return "cancelled"
+            return END_CANCELLED
         vocabulary = await _vocabulary(page)
         for end in vocabulary["end"]:
             if await _text_visible(page, end):

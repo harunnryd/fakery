@@ -3,8 +3,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from twin.bots.models import BotRun
-from twin.bots.runner import is_orphan, sweep_orphans
+from twin.bots.runner import RunContext, _complete, is_orphan, sweep_orphans
 from twin.bots.state import BotStatus
+from twin.core.config import Settings
 
 
 class FakeRedis:
@@ -111,3 +112,23 @@ async def test_sweep_reaps_only_stale_runs_without_beat() -> None:
     assert rows[1].status == "joined"
     assert rows[2].status == "recording"
     assert session.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("cancelled", "expected_code"),
+    [(True, "cancelled"), (False, None)],
+    ids=["cancelled-run", "natural-end"],
+)
+async def test_complete_marks_cancelled_runs(cancelled: bool, expected_code: str | None) -> None:
+    moment = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
+    run = _run_at("recording", moment, "bot_x")
+    session = FakeSession(run=run)
+    context = RunContext(
+        session_factory=lambda: session,  # type: ignore[return-value]
+        settings=Settings(),
+        blob=None,
+        redis=None,
+    )
+    await _complete("bot_x", context, b"", cancelled)
+    assert run.status == "completed"
+    assert run.error_code == expected_code
