@@ -1,0 +1,79 @@
+from datetime import UTC, datetime
+
+import pytest
+
+from twin.bots.models import BotRun, TranscriptSegment
+from twin.bots.service import BotService
+from twin.bots.state import BotStatus
+
+
+class FakeEvents:
+    def __init__(self) -> None:
+        self.statuses: list[tuple[str, str]] = []
+        self.segments: list[TranscriptSegment] = []
+
+    async def status_changed(self, bot_id: str, status: str) -> None:
+        self.statuses.append((bot_id, status))
+
+    async def transcript_segment(self, segment: TranscriptSegment) -> None:
+        self.segments.append(segment)
+
+
+class FakeRepo:
+    def __init__(self) -> None:
+        self.runs: dict[str, BotRun] = {}
+        self.saved: list[TranscriptSegment] = []
+
+    async def add(self, run: BotRun) -> None:
+        self.runs[run.id] = run
+
+    async def get(self, bot_id: str) -> BotRun | None:
+        return self.runs.get(bot_id)
+
+    async def segments(self, bot_id: str) -> list:
+        return [seg for seg in self.saved if seg.bot_run_id == bot_id]
+
+    async def add_segment(self, segment: TranscriptSegment) -> None:
+        self.saved.append(segment)
+
+
+def _service(events: FakeEvents | None = None) -> tuple[BotService, FakeRepo]:
+    repo = FakeRepo()
+    fixed = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
+    service = BotService(repo, clock=lambda: fixed, events=events)
+    return service, repo
+
+
+async def test_advance_emits_every_transition() -> None:
+    events = FakeEvents()
+    service, _ = _service(events)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    await service.advance(run.id, BotStatus.JOINING)
+    await service.advance(run.id, BotStatus.FAILED)
+    assert events.statuses == [(run.id, "joining"), (run.id, "failed")]
+
+
+async def test_advance_silent_without_sink() -> None:
+    service, _ = _service(None)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    await service.advance(run.id, BotStatus.JOINING)
+    assert (await service.get(run.id)).status == "joining"
+
+
+async def test_ingest_persists_and_emits_segment() -> None:
+    events = FakeEvents()
+    service, repo = _service(events)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    segment = await service.ingest_segment(run.id, "setuju", 1000, 2000)
+    assert segment.id.startswith("seg_")
+    assert [seg.text for seg in await service.transcript(run.id)] == ["setuju"]
+    assert events.segments == [segment]
+    assert repo.saved == [segment]
+
+
+@pytest.mark.parametrize("speaker", ["Dina", None], ids=["named", "anonymous"])
+async def test_ingest_keeps_speaker(speaker: str | None) -> None:
+    service, _ = _service(None)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    segment = await service.ingest_segment(run.id, "ok", 0, 500, speaker=speaker)
+    assert segment.speaker == speaker
