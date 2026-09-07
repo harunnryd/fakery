@@ -10,59 +10,77 @@
 > weekly report) when they cannot attend, delivering their update and
 > answering basic follow-ups on their behalf.
 
-## Current state (2026-09-06)
+## Current state (2026-09-06, live-verified tonight)
 
 - `[x]` Scaffold: FastAPI app, bot state machine + API (create/get/
   transcript), core (config/logging/errors), migrations, deployment
-  (Dockerfile bot-ready + k8s manifests + compose), CI. Test count:
-  `just test`.
-- `[~]` Contract without implementations: `MeetBrowser` — the engine +
-  humanized join recipe land in M1. Provider contracts (audio capture,
-  STT, notes, blob, webhook delivery) are cut ponytail-style until
-  their modules start; the patterns live in this plan + research/.
+  (Dockerfile bot-ready + k8s manifests + compose), CI.
+- `[x]` M1 loop closed live: Redis-Streams worker claims runs, CloakBrowser
+  joins real meetings (knock-and-admit ≤2 s on fresh links), DOM-channel
+  audio recorded as Opus/webm, hashed + stored in MinIO
+  (37 KB verified), status visible via API. 80 tests green.
+- `[x]` Profile store + lease: tier profiles (`signed`/`guest`) ship as
+  `profiles/{tenant}/meet/{tier}/profile.tar.gz` in blob (Fernet-sealed
+  when `PROFILE_ENCRYPTION_KEY` is set), exclusive Redis lease per
+  profile, heartbeat + orphan sweep (stale live runs fail as `orphaned`).
+- `[~]` Cancel semantics (corrected from the pre-live draft): cancel
+  before join fails the run (`cancelled`); cancel mid-run completes it
+  with the partial recording and marks `error_code=cancelled` — a user
+  stop is not a failure, and the soak harness counts it as success.
 
 ## Modules to build (dependency order)
 
-### 1. `bots/runner` — the worker (new module)
+### 1. `bots/runner` — the worker (shipped, live)
 The process that turns a queued bot run into an attended meeting.
-- `[ ]` Redis Streams consumer: claim queued runs, run lifecycle,
+- `[x]` Redis Streams consumer: claim queued runs, run lifecycle,
   release on shutdown.
-- `[ ]` Drive loop: engine → join → capture → transcribe → notes,
+- `[x]` Drive loop: engine → join → capture → transcribe → notes,
   updating bot status at each transition (state machine guards it).
 - `[ ]` Recurring schedules: stored rules ("standup every Monday
   09:00") spawn bot runs without a client call — required by the
-  stand-in mode.
+  stand-in mode (M6).
 - `[ ]` Runtime isolation tiers behind one `BotRuntime` protocol:
-  process-per-bot (dev/M1, ~3 per 4 GB box) → container-per-bot
-  (OS isolation + own egress IP per container) → **microVM-per-bot as
-  the production target** (kernel-level blast-radius zero, Firecracker
-  on Linux hosts, per-VM egress IP makes the IP-per-tenant policy
-  trivial). Density per tier is config; anti-affinity (never two bots
-  in one meeting) is a scheduler rule.
-- `[ ]` Heartbeat + orphan recovery: worker death leaves runs stuck in
-  `joining`/`recording` → requeue or fail with code.
-- `[ ]` Cancellation: `DELETE /v1/bots/{id}` → cooperative stop →
-  status `failed` (code `cancelled`).
+  `process` (one browser per run in the worker pod — live) →
+  **`job` (one k8s Job per run — live since 2026-09-07**, own Xvfb +
+  limits per bot, TTL cleanup, supervisor watches). Kata stays a
+  one-line `runtimeClassName` option for KVM hosts; no DIY-VMM track
+  (decided 2026-09-07: k8s already provides every supervisor
+  mechanism, cloud-independent). Density per tier is config;
+  anti-affinity (never two bots in one meeting) is a scheduler rule.
+- `[x]` Per-session lifecycle: one claimed run = one fresh browser in
+  its own isolation unit — spawned at claim time, the leased profile
+  mounted from MinIO, the unit destroyed on completion (nothing
+  survives between sessions; state lives only in Postgres + blob).
+  Live tier today is job-per-bot (one k8s Job per run); Kata stays a
+  one-line option, no DIY-VMM track.
+- `[x]` Heartbeat + orphan recovery: the runner beats
+  (`bots:hb:{id}`, 90 s TTL) during a run; the worker sweeps live-state
+  runs with no fresh beat older than 5 min and fails them as `orphaned`.
+  Stream-level reclaim (`reclaim_stale`) covers worker death mid-claim.
+- `[x]` Cancellation: `DELETE /v1/bots/{id}` → cooperative stop →
+  `failed` (`cancelled`) before join, `completed` + partial recording
+  with `error_code=cancelled` mid-run.
 
-### 2. `meet/` — live Google Meet layer
-- `[ ]` Re-derive join selectors against live Meet (prejoin fields,
+### 2. `meet/` — live Google Meet layer (shipped, live)
+- `[x]` Re-derive join selectors against live Meet (prejoin fields,
   admit/knock button, leave button, "meeting ended" signal) — never
   copied from memory.
-- `[ ]` Wire `PatchrightBrowser`: two identity tiers — persistent
+- `[x]` Wire `CloakBrowser`: two identity tiers — persistent
   signed-in profile (primary) and the humanized guest tier (no
   account); headed mode; config via `Settings.browser_profile_dir`.
-- `[ ]` Admission handling: instant-join links and knock-and-wait;
+- `[x]` Admission handling: instant-join links and knock-and-wait;
   timeout → fail with honest code.
-- `[ ]` Mid-meeting events: kicked, ended, network drop → graceful
+- `[x]` Mid-meeting events: kicked, ended, network drop → graceful
   leave + status update.
 - `[ ]` Chat channel: watch in-meeting chat for wake cues (exact-match
   replies — proven live channel) and mirror answers as chat messages
-  when configured.
+  when configured (M5).
 
-### 3. `audio/` — capture (listen-only first)
-- `[ ]` Fake-device capture over the browser page (DOM/CDP channel —
-  `evaluate` is a separate JS world and must not be used).
-- `[ ]` `FileRecorder`: PCM frames → encoded recording; hash + upload
+### 3. `audio/` — capture (listen-only, shipped live)
+- `[x]` Capture over the browser page: an RTC hook armed as an init
+  script (before page JS runs) records Opus/webm chunks into the DOM;
+  the poll loop drains them. Verified: 76 chunks / 37 KB in one run.
+- `[x]` Recording: webm chunks → bytes; hash + upload
   to blob on meeting end.
 - `[ ]` `AudioSink` playback arrives with the voice module (M5);
   listen-only ships first.
@@ -114,16 +132,17 @@ never speaks autonomously — silence is the default state.
   meeting moment (schedule- or client-triggered), then fall back to
   wake-triggered Q&A.
 
-### 8. `storage/` — blob implementation
-- `[ ]` S3-compatible `BlobStore` (MinIO in dev, any S3 API in prod).
-- `[ ]` **Chrome profile store** (LMA-proven pattern): key
+### 8. `storage/` — blob implementation (shipped)
+- `[x]` S3-compatible `BlobStore` (MinIO in dev, any S3 API in prod).
+- `[x]` **Chrome profile store** (LMA-proven pattern): key
   `profiles/{tenant}/{platform}/profile.tar`, lifecycle
-  download → launch persistent context → upload back, encrypted at
-  rest (profiles are live Google session cookies — treat as secrets).
-- `[ ]` **Exclusive lease per profile (Redis, TTL)**: the same profile
+  download → launch persistent context → upload back, Fernet-sealed
+  when `PROFILE_ENCRYPTION_KEY` is set (profiles are live Google
+  session cookies — treat as secrets).
+- `[x]` **Exclusive lease per profile (Redis, TTL)**: the same profile
   can never run on two bots at once, making the same-account
   double-join trap impossible by construction.
-- `[ ]` Retention rule: raw audio 30 days, then purge (config-driven).
+- `[ ]` Retention rule: raw audio 30 days, then purge (M4 job).
 
 ### 9. `webhooks/` — real delivery
 - `[ ]` `webhook_subscriptions` table + API CRUD (URL per client).
@@ -144,14 +163,14 @@ never speaks autonomously — silence is the default state.
 
 ### 11. `deploy/` — ship the loop
 - `[x]` Dockerfile: one image for API and worker — Python 3.12 +
-  Chromium (Patchright) + Xvfb + fonts; a bot can run headed under
+   Chromium (CloakBrowser) + Xvfb + fonts; a bot can run headed under
   Xvfb inside the container.
 - `[x]` Kubernetes manifests (`deploy/k8s/`): namespace, Postgres,
   Redis, MinIO (all with PVCs), migrate Job, API Deployment + Service
   — deployable today on any k8s (Docker Desktop to real clusters).
-- `[ ]` Worker Deployment lands with module 1 (same image, worker
-  command; per-bot isolation tiers attach here); prod-grade ingress,
-  HPA and multi-node scheduling later.
+- `[x]` Worker Deployment live with module 1 (same image, worker
+  command under Xvfb; per-bot isolation tiers attach here);
+  prod-grade ingress, HPA and multi-node scheduling later.
 
 ## The deep stack — human-likeness (M7 and beyond)
 
@@ -227,7 +246,7 @@ permanent engineering front, not a one-time unlock. Even AWS's LMA
 sample skips the headless Meet bot entirely and routes Meet through an
 in-user-browser capture extension (evidence:
 `research/lma-virtual-participant.md`). Validated so far:
-stock headless is fingerprint-blocked; Patchright headed + signed-in
+stock headless is fingerprint-blocked; CloakBrowser headed + signed-in
 profile reaches prejoin unattended; a robotic guest knock is silently
 discarded while a locale-matched humanized guest knock is offered to
 the host and admitted (live A/B, 2026-09-06); knock-and-admit works.
@@ -239,8 +258,8 @@ Layered posture:
   (takeover trap). Guest (OSS tier): no Google account at all — viable
   with the humanization layer (live-validated) and removes the
   account-provisioning barrier for self-hosters.
-- **Fingerprint** — stealth engine (Patchright Tier-2 today; Tier-1
-  commercial stealth behind the launcher interface as the fallback),
+- **Fingerprint** — stealth engine (CloakBrowser, source-level
+  Chromium patches, LMA-proven in production),
   persistent context with realistic history, headed mode under Xvfb,
   desktop-Chrome UA. Never bare headless.
 - **Behavior** — humanized pacing in the join flow is MANDATORY, not
@@ -250,7 +269,7 @@ Layered posture:
   driven with locale match, mouse telemetry, and per-keystroke typing.
   Consistent IP identity, media/tone fixtures outliving the run.
 - **Coherence** — the bot's locale story is config, not chassis: the
-  microVM can live anywhere, but the browser context's locale,
+  pod can live anywhere, but the browser context's locale,
   timezone, geolocation, Accept-Language, AND the egress IP's
   geography must all tell the same story as the persona (live A/B:
   `en-US` robotic vs `id-ID` humanized on the same machine flipped
@@ -266,8 +285,9 @@ Layered posture:
   and IP (reads as one office), cross-tenant bots need distinct
   egress IPs, and two bots never join the same meeting. Runtime
   isolation is tiered (`BotRuntime` protocol, module 1) with
-  **microVM-per-bot as the production target** (LMA-proven pattern:
-  one bot = one microVM, profiles shipped from object storage);
+  **job-per-bot as the production target** (one k8s Job per run,
+  profiles shipped from object storage; Kata is a one-line
+  `runtimeClassName` option, never a DIY-VMM project);
   the detection ledger arbitrates when to move up a tier.
 - **Telemetry** — every join logs engine version + outcome; blocked
   joins go into a detection ledger (signals observed). A rising block
@@ -334,6 +354,7 @@ Layered posture:
    no Google account). The locale story is persona config, coherent
    across locale, timezone, geolocation, Accept-Language, and egress
    IP geography.
-6. Runtime isolation: microVM-per-bot is the production target
+6. Runtime isolation: job-per-bot is the production target
    (profiles shipped from object storage, exclusive lease per profile);
-   process-per-bot for dev, container-per-bot as the middle tier.
+   process-per-bot for dev. No DIY-VMM track: k8s provides every
+   supervisor mechanism, cloud-independent.
