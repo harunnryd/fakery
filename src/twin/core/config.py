@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     browser_headed: bool = True
     bot_display_name: str = "Fakery Guest"
     bot_runtime: str = "process"
+    bot_image: str = "fakery:dev"
+    pod_namespace: str = "fakery"
     bot_locale: str = "id-ID"
     bot_timezone: str = "Asia/Jakarta"
     meeting_max_minutes: int = 45

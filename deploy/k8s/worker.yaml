@@ -17,6 +17,7 @@ spec:
         app.kubernetes.io/name: worker
         app.kubernetes.io/component: bot-worker
     spec:
+      serviceAccountName: worker
       containers:
         - name: worker
           image: fakery:dev
@@ -26,6 +27,10 @@ spec:
           command: ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & sleep 2 && DISPLAY=:99 python -m twin.worker"]
           envFrom:
             - secretRef: {name: twin-secrets}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - {name: BOT_IMAGE, value: fakery:dev}
           resources:
             requests:
               memory: "2Gi"

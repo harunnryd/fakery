@@ -9,6 +9,7 @@ labels:
 resources:
   - namespace.yaml
   - secret.yaml
+  - rbac.yaml
   - postgres.yaml
   - redis.yaml
   - minio.yaml

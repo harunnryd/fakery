@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: fakery
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/component: bot-worker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-jobs
+  namespace: fakery
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/component: bot-worker
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs/status"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-jobs
+  namespace: fakery
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/component: bot-worker
+subjects:
+  - kind: ServiceAccount
+    name: worker
+    namespace: fakery
+roleRef:
+  kind: Role
+  name: worker-jobs
+  apiGroup: rbac.authorization.k8s.io

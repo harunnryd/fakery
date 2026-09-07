@@ -1,5 +1,3 @@
-import asyncio
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,16 +7,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from twin.bots.models import BotRun
-from twin.bots.queue import (
-    acquire_lease,
-    beat,
-    clear_beat,
-    heartbeat_key,
-    is_cancelled,
-    lease_key,
-    release_lease,
+from twin.bots.queue import acquire_lease, heartbeat_key, is_cancelled, lease_key, release_lease
+from twin.bots.runtime import (
+    PLATFORM_MEET,
+    TIER_GUEST,
+    TIER_SIGNED,
+    PreparedLaunch,
+    RunContext,
+    fail_run,
+    launch_runtime,
 )
-from twin.bots.runtime import launch_runtime
 from twin.bots.service import BotService, SqlalchemyBotRepository
 from twin.bots.state import LIVE_STATUSES, BotStatus
 from twin.core.config import Settings
@@ -26,26 +24,9 @@ from twin.core.time import utcnow
 from twin.meet.launcher import EngineConfig
 from twin.meet.profile_prep import init_profile_defaults
 from twin.meet.recorder import RECORDER_HOOK
-from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
-from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
 
 logger = structlog.get_logger(__name__)
-
-PLATFORM_MEET = "meet"
-TIER_SIGNED = "signed"
-TIER_GUEST = "guest"
-HEARTBEAT_INTERVAL_S = 30
-PROFILE_CONTENT_TYPE = "application/gzip"
-
-
-@dataclass(slots=True)
-class RunContext:
-    session_factory: async_sessionmaker
-    settings: Settings
-    blob: BlobStore | None
-    redis: Redis | None
-    owner: str = ""
 
 
 def _service(session) -> BotService:
@@ -65,44 +46,19 @@ async def execute_run(bot_id: str, context: RunContext) -> None:
 
     launch = _prepare_launch(settings)
     tier = TIER_GUEST if launch.config.guest else TIER_SIGNED
-    profile_dir = launch.config.profile_dir
     lease = lease_key(settings.tenant, PLATFORM_MEET, tier)
     if context.redis is not None and not await acquire_lease(context.redis, lease, context.owner):
         await fail_run(bot_id, context, "profile-busy")
         return
-    await _restore_profile(context, tier, profile_dir)
-    heartbeat: asyncio.Task | None = None
+    runtime = launch_runtime(settings.bot_runtime, namespace=settings.pod_namespace)
     try:
-        async with session_scope(context.session_factory) as session:
-            await _service(session).advance(bot_id, BotStatus.JOINING)
-        if context.redis is not None:
-            heartbeat = asyncio.create_task(_beat_loop(context.redis, bot_id))
-        runtime = launch_runtime(settings.bot_runtime)
         await runtime.spawn(bot_id, meeting_url, display_name, context, launch)
     finally:
-        if heartbeat is not None:
-            heartbeat.cancel()
-            try:
-                await heartbeat
-            except asyncio.CancelledError:
-                pass
-        if context.redis is not None:
-            try:
-                await clear_beat(context.redis, bot_id)
-            except Exception as err:
-                logger.warning("run.beat_clear_failed", bot_id=bot_id, error=str(err))
-        await _persist_profile(context, tier, profile_dir)
         if context.redis is not None:
             try:
                 await release_lease(context.redis, lease, context.owner)
             except Exception as err:
                 logger.warning("run.lease_release_failed", bot_id=bot_id, error=str(err))
-
-
-@dataclass(slots=True)
-class PreparedLaunch:
-    config: EngineConfig
-    warmup: bool
 
 
 def _prepare_launch(settings: Settings) -> PreparedLaunch:
@@ -120,55 +76,6 @@ def _prepare_launch(settings: Settings) -> PreparedLaunch:
         init_scripts=(RECORDER_HOOK,),
     )
     return PreparedLaunch(config=config, warmup=not cookies_db.exists())
-
-
-def _missing_blob_key(err: Exception) -> bool:
-    return getattr(err, "code", "") == "NoSuchKey"
-
-
-async def _restore_profile(context: RunContext, tier: str, profile_dir: Path) -> None:
-    if context.blob is None:
-        logger.warning("profile.restore_skipped", reason="no-blob")
-        return
-    key = profile_key(context.settings.tenant, PLATFORM_MEET, tier)
-    try:
-        data = await context.blob.get(key)
-    except Exception as err:
-        if _missing_blob_key(err):
-            return
-        logger.warning("profile.restore_failed", error=str(err))
-        return
-    unpack_profile(unseal(data, context.settings.profile_encryption_key or None), profile_dir)
-
-
-async def _persist_profile(context: RunContext, tier: str, profile_dir: Path) -> None:
-    if context.blob is None:
-        return
-    key = profile_key(context.settings.tenant, PLATFORM_MEET, tier)
-    try:
-        sealed = seal(pack_profile(profile_dir), context.settings.profile_encryption_key or None)
-        await context.blob.put(key, sealed, PROFILE_CONTENT_TYPE)
-    except Exception as err:
-        logger.warning("profile.persist_failed", error=str(err))
-
-
-async def _beat_loop(redis: Redis, bot_id: str) -> None:
-    while True:
-        try:
-            await beat(redis, bot_id)
-        except Exception as err:
-            logger.warning("run.heartbeat_failed", bot_id=bot_id, error=str(err))
-        await asyncio.sleep(HEARTBEAT_INTERVAL_S)
-
-
-async def fail_run(bot_id: str, context: RunContext, code: str) -> None:
-    async with session_scope(context.session_factory) as session:
-        service = _service(session)
-        run = await service.get(bot_id)
-        if BotStatus(run.status) in (BotStatus.COMPLETED, BotStatus.FAILED):
-            return
-        run.error_code = code
-        await service.advance(bot_id, BotStatus.FAILED)
 
 
 def is_orphan(
