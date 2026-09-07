@@ -179,3 +179,21 @@ def test_ffmpeg_argv_decodes_to_mono_pcm() -> None:
 def test_launch_transcriber_rejects_unknown_provider() -> None:
     with pytest.raises(ValueError, match="unknown transcriber"):
         launch_transcriber("acme", "key")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, ("en", True)),
+        ({"language": "id"}, ("id", True)),
+        ({"diarize": False, "language": "fr"}, ("fr", False)),
+    ],
+    ids=["defaults", "language", "full"],
+)
+def test_launch_transcriber_threads_options(kwargs: dict, expected: tuple) -> None:
+    from twin.transcription.deepgram import DeepgramTranscriber
+
+    transcriber = launch_transcriber("deepgram", "key", **kwargs)
+    assert isinstance(transcriber, DeepgramTranscriber)
+    language, diarize = expected
+    assert (transcriber._language, transcriber._diarize) == (language, diarize)

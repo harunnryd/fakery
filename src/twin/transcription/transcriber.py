@@ -21,12 +21,14 @@ class Transcriber(Protocol):
     async def transcribe_recording(self, audio: bytes) -> list[Segment]: ...
 
 
-def launch_transcriber(kind: str, api_key: str, diarize: bool = True) -> Transcriber:
+def launch_transcriber(
+    kind: str, api_key: str, diarize: bool = True, language: str = "en"
+) -> Transcriber:
     match kind:
         case "deepgram":
             from twin.transcription.deepgram import DeepgramTranscriber
 
-            return DeepgramTranscriber(api_key, diarize)
+            return DeepgramTranscriber(api_key, diarize, language)
         case _:
             raise ValueError(f"unknown transcriber: {kind}")
 

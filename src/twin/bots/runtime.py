@@ -159,7 +159,9 @@ def _transcriber(settings: Settings) -> Transcriber | None:
     if not settings.stt_api_key:
         logger.warning("run.stt_disabled", reason="no-key")
         return None
-    return launch_transcriber(settings.stt_provider, settings.stt_api_key, settings.stt_diarize)
+    return launch_transcriber(
+        settings.stt_provider, settings.stt_api_key, settings.stt_diarize, settings.stt_language
+    )
 
 
 def _tier(settings: Settings) -> str:

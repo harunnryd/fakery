@@ -5,7 +5,6 @@ from typing import Any
 from twin.transcription.transcriber import Segment, SegmentSink, live_segment, prerecorded_segments
 
 STREAM_MODEL = "nova-3"
-STREAM_LANGUAGE = "id"
 STREAM_ENCODING = "linear16"
 STREAM_SAMPLE_RATE = 16000
 STREAM_CHANNELS = 1
@@ -13,9 +12,10 @@ DIARIZE_MODEL = "latest"
 
 
 class DeepgramTranscriber:
-    def __init__(self, api_key: str, diarize: bool = True) -> None:
+    def __init__(self, api_key: str, diarize: bool = True, language: str = "en") -> None:
         self._api_key = api_key
         self._diarize = diarize
+        self._language = language
 
     async def transcribe_stream(self, audio: AsyncIterator[bytes], sink: SegmentSink) -> int:
         from deepgram import AsyncDeepgramClient
@@ -23,7 +23,7 @@ class DeepgramTranscriber:
         client = AsyncDeepgramClient(api_key=self._api_key)
         options = {
             "model": STREAM_MODEL,
-            "language": STREAM_LANGUAGE,
+            "language": self._language,
             "encoding": STREAM_ENCODING,
             "sample_rate": STREAM_SAMPLE_RATE,
             "channels": STREAM_CHANNELS,
@@ -55,7 +55,7 @@ class DeepgramTranscriber:
         client = AsyncDeepgramClient(api_key=self._api_key)
         options = {
             "model": STREAM_MODEL,
-            "language": STREAM_LANGUAGE,
+            "language": self._language,
             "smart_format": True,
             "punctuate": True,
         }
