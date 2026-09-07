@@ -157,27 +157,20 @@ class BotService:
         await self.get(bot_id)
         return await self._repo.segments(bot_id)
 
-    async def ingest_segment(
-        self,
-        bot_id: str,
-        text: str,
-        start_ms: int,
-        end_ms: int,
-        speaker: str | None = None,
-    ) -> TranscriptSegment:
-        segment = TranscriptSegment(
+    async def ingest_segment(self, bot_id: str, segment: Segment) -> TranscriptSegment:
+        stored = TranscriptSegment(
             id=f"seg_{uuid.uuid4().hex}",
             bot_run_id=bot_id,
-            speaker=speaker,
-            text=text,
-            start_ms=start_ms,
-            end_ms=end_ms,
+            speaker=segment.speaker,
+            text=segment.text,
+            start_ms=segment.start_ms,
+            end_ms=segment.end_ms,
             created_at=self._clock(),
         )
-        await self._repo.add_segment(segment)
+        await self._repo.add_segment(stored)
         if self._events is not None:
-            await self._events.transcript_segment(segment)
-        return segment
+            await self._events.transcript_segment(stored)
+        return stored
 
     async def annotate_speakers(self, bot_id: str, segments: list[Segment]) -> int:
         annotated = 0

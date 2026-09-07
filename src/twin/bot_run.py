@@ -30,7 +30,7 @@ async def _run(bot_id: str) -> int:
     try:
         launch = _prepare_launch(settings)
         async with context.session_factory() as session:
-            run = await _service(session).get(bot_id)
+            run = await _service(session, context).get(bot_id)
         display = run.display_name or settings.bot_display_name
         await attend(bot_id, run.meeting_url, display, context, launch)
     except join_flow.JoinError as err:

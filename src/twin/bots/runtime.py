@@ -316,9 +316,7 @@ async def _queue_chunks(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[byt
 
 async def _ingest_segment(bot_id: str, context: RunContext, segment: Segment) -> None:
     async with session_scope(context.session_factory) as session:
-        await _service(session, context).ingest_segment(
-            bot_id, segment.text, segment.start_ms, segment.end_ms, speaker=segment.speaker
-        )
+        await _service(session, context).ingest_segment(bot_id, segment)
 
 
 async def _transcribe_live(
@@ -349,29 +347,30 @@ async def _await_transcript(task: asyncio.Task | None, bot_id: str) -> int:
 async def _transcribe_batch(
     bot_id: str, context: RunContext, transcriber: Transcriber, recording: bytes
 ) -> None:
-    try:
-        segments = await transcriber.transcribe_recording(recording)
-    except Exception as err:
-        logger.warning("transcribe.batch_failed", bot_id=bot_id, error=str(err))
-        return
-    for segment in segments:
+    for segment in await _batch_segments(bot_id, context, transcriber, recording):
         await _ingest_segment(bot_id, context, segment)
 
 
 async def _annotate_transcript(
     bot_id: str, context: RunContext, transcriber: Transcriber, recording: bytes
 ) -> None:
-    try:
-        segments = await transcriber.transcribe_recording(recording)
-    except Exception as err:
-        logger.warning("transcribe.batch_failed", bot_id=bot_id, error=str(err))
-        return
+    segments = await _batch_segments(bot_id, context, transcriber, recording)
     if not _confident_split(segments):
         logger.info("transcribe.split_uncertain", bot_id=bot_id)
         return
     async with session_scope(context.session_factory) as session:
         annotated = await _service(session, context).annotate_speakers(bot_id, segments)
     logger.info("transcribe.annotated", bot_id=bot_id, segments=annotated)
+
+
+async def _batch_segments(
+    bot_id: str, context: RunContext, transcriber: Transcriber, recording: bytes
+) -> list[Segment]:
+    try:
+        return await transcriber.transcribe_recording(recording)
+    except Exception as err:
+        logger.warning("transcribe.batch_failed", bot_id=bot_id, error=str(err))
+        return []
 
 
 def _confident_split(segments: list[Segment]) -> bool:

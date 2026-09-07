@@ -60,6 +60,30 @@ def test_live_segment_maps_deepgram_message(message: object, expected: object) -
             end_ms,
             final,
         )
+        assert segment.speaker is None
+
+
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [
+        ([_word(0.0, 1.0, 0), _word(1.0, 2.0, 0), _word(2.0, 3.0, 1)], "0"),
+        ([_word(0.0, 1.0, 1), _word(1.0, 2.0, 1)], "1"),
+        ([_word(0.0, 1.0, 0), _word(1.0, 2.0, 1)], "0"),
+        ([_word(0.0, 1.0, None)], None),
+    ],
+    ids=["majority", "unanimous", "tie-earliest", "unlabeled"],
+)
+def test_live_segment_votes_speaker(words: list, expected: str | None) -> None:
+    message = SimpleNamespace(
+        channel=SimpleNamespace(alternatives=[SimpleNamespace(transcript="halo", words=words)]),
+        start=0.0,
+        duration=3.0,
+        is_final=True,
+        speech_final=False,
+    )
+    segment = live_segment(message)
+    assert segment is not None
+    assert segment.speaker == expected
 
 
 def _sentence(text: str, start: float, end: float) -> SimpleNamespace:
@@ -113,38 +137,6 @@ def _ranged_word(text: str, start: float, end: float, speaker: int | None) -> Si
     ("words", "expected"),
     [
         (
-            [_word(0.0, 1.0, 0), _word(1.0, 2.0, 0), _word(2.0, 3.0, 1)],
-            ("halo", 0, 3000, "0"),
-        ),
-        ([_word(0.0, 1.0, 1), _word(1.0, 2.0, 1)], ("halo", 0, 2000, "1")),
-        ([_word(0.0, 1.0, 0), _word(1.0, 2.0, 1)], ("halo", 0, 2000, "0")),
-        ([_word(0.0, 1.0, None)], ("halo", 0, 1000, None)),
-    ],
-    ids=["majority", "unanimous", "tie-earliest", "unlabeled"],
-)
-def test_live_segment_votes_speaker(words: list, expected: tuple) -> None:
-    message = SimpleNamespace(
-        channel=SimpleNamespace(alternatives=[SimpleNamespace(transcript="halo", words=words)]),
-        start=0.0,
-        duration=3.0,
-        is_final=True,
-        speech_final=False,
-    )
-    segment = live_segment(message)
-    assert segment is not None
-    text, start_ms, end_ms, speaker = expected
-    assert (segment.text, segment.start_ms, segment.end_ms, segment.speaker) == (
-        text,
-        start_ms,
-        end_ms,
-        speaker,
-    )
-
-
-@pytest.mark.parametrize(
-    ("words", "expected"),
-    [
-        (
             [_ranged_word("halo", 1.0, 1.5, 1), _ranged_word("tim", 1.5, 2.5, 1)],
             "1",
         ),
@@ -153,7 +145,7 @@ def test_live_segment_votes_speaker(words: list, expected: tuple) -> None:
             "0",
         ),
         ([_ranged_word("jauh", 9.0, 9.5, 1)], None),
-        ([_ranged_word("bisu", 1.0, 1.5, None)], None),
+        ([_ranged_word("bisU", 1.0, 1.5, None)], None),
     ],
     ids=["unanimous", "tie-earliest", "outside-range", "unlabeled"],
 )

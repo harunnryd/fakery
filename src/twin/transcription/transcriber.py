@@ -77,6 +77,23 @@ def live_segment(message: Any) -> Segment | None:
     )
 
 
+def _batch_speaker(sentence: Any, words: list) -> str | None:
+    direct = getattr(sentence, "speaker", None)
+    if direct is not None:
+        return str(direct)
+    return _majority_speaker(
+        _words_in_range(words, int(sentence.start * 1000), int(sentence.end * 1000))
+    )
+
+
+def _words_in_range(words: list, start_ms: int, end_ms: int) -> list:
+    return [
+        word
+        for word in words
+        if int(word.start * 1000) < end_ms and int(word.end * 1000) > start_ms
+    ]
+
+
 def prerecorded_segments(response: Any) -> list[Segment]:
     try:
         alternative = response.results.channels[0].alternatives[0]
@@ -103,20 +120,3 @@ def prerecorded_segments(response: Any) -> list[Segment]:
         return []
     duration = getattr(response.results, "duration", 0) or 0
     return [Segment(text=text, start_ms=0, end_ms=int(duration * 1000))]
-
-
-def _batch_speaker(sentence: Any, words: list) -> str | None:
-    direct = getattr(sentence, "speaker", None)
-    if direct is not None:
-        return str(direct)
-    return _majority_speaker(
-        _words_in_range(words, int(sentence.start * 1000), int(sentence.end * 1000))
-    )
-
-
-def _words_in_range(words: list, start_ms: int, end_ms: int) -> list:
-    return [
-        word
-        for word in words
-        if int(word.start * 1000) < end_ms and int(word.end * 1000) > start_ms
-    ]

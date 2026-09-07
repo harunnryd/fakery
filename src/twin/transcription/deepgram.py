@@ -2,7 +2,12 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from twin.transcription.transcriber import Segment, SegmentSink, live_segment, prerecorded_segments
+from twin.transcription.transcriber import (
+    Segment,
+    SegmentSink,
+    live_segment,
+    prerecorded_segments,
+)
 
 STREAM_MODEL = "nova-3"
 STREAM_ENCODING = "linear16"
@@ -21,20 +26,17 @@ class DeepgramTranscriber:
         from deepgram import AsyncDeepgramClient
 
         client = AsyncDeepgramClient(api_key=self._api_key)
-        options = {
-            "model": STREAM_MODEL,
-            "language": self._language,
-            "encoding": STREAM_ENCODING,
-            "sample_rate": STREAM_SAMPLE_RATE,
-            "channels": STREAM_CHANNELS,
-            "interim_results": True,
-            "smart_format": True,
-            "punctuate": True,
-        }
-        if self._diarize:
-            options["diarize_model"] = DIARIZE_MODEL
         finals = 0
-        async with client.listen.v1.connect(**options) as socket:
+        async with client.listen.v1.connect(
+            model=STREAM_MODEL,
+            language=self._language,
+            encoding=STREAM_ENCODING,
+            sample_rate=STREAM_SAMPLE_RATE,
+            channels=STREAM_CHANNELS,
+            interim_results=True,
+            smart_format=True,
+            punctuate=True,
+        ) as socket:
             feed = asyncio.create_task(_feed(socket, audio))
             try:
                 async for message in socket:

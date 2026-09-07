@@ -25,6 +25,9 @@ class FakeRepo:
     async def add_segment(self, segment) -> None:
         self._segments.setdefault(segment.bot_run_id, []).append(segment)
 
+    async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
+        return 0
+
 
 class FakeSubscriptions:
     def __init__(self) -> None:

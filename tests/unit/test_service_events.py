@@ -78,7 +78,9 @@ async def test_ingest_persists_and_emits_segment() -> None:
     events = FakeEvents()
     service, repo = _service(events)
     run = await service.create("https://meet.google.com/abc-defg-hij")
-    segment = await service.ingest_segment(run.id, "setuju", 1000, 2000)
+    segment = await service.ingest_segment(
+        run.id, Segment(text="setuju", start_ms=1000, end_ms=2000)
+    )
     assert segment.id.startswith("seg_")
     assert [seg.text for seg in await service.transcript(run.id)] == ["setuju"]
     assert events.segments == [segment]
@@ -89,16 +91,20 @@ async def test_ingest_persists_and_emits_segment() -> None:
 async def test_ingest_keeps_speaker(speaker: str | None) -> None:
     service, _ = _service(None)
     run = await service.create("https://meet.google.com/abc-defg-hij")
-    segment = await service.ingest_segment(run.id, "ok", 0, 500, speaker=speaker)
+    segment = await service.ingest_segment(
+        run.id, Segment(text="ok", start_ms=0, end_ms=500, speaker=speaker)
+    )
     assert segment.speaker == speaker
 
 
 async def test_annotate_fills_only_blank_overlapping_segments() -> None:
     service, _ = _service(None)
     run = await service.create("https://meet.google.com/abc-defg-hij")
-    await service.ingest_segment(run.id, "pagi", 1000, 2000)
-    await service.ingest_segment(run.id, "siang", 5000, 6000)
-    await service.ingest_segment(run.id, "sore", 1500, 2500, speaker="9")
+    await service.ingest_segment(run.id, Segment(text="pagi", start_ms=1000, end_ms=2000))
+    await service.ingest_segment(run.id, Segment(text="siang", start_ms=5000, end_ms=6000))
+    await service.ingest_segment(
+        run.id, Segment(text="sore", start_ms=1500, end_ms=2500, speaker="9")
+    )
     annotated = await service.annotate_speakers(
         run.id, [Segment(text="x", start_ms=500, end_ms=2500, speaker="1")]
     )
@@ -110,7 +116,7 @@ async def test_annotate_fills_only_blank_overlapping_segments() -> None:
 async def test_annotate_skips_speakerless_batch() -> None:
     service, _ = _service(None)
     run = await service.create("https://meet.google.com/abc-defg-hij")
-    await service.ingest_segment(run.id, "pagi", 1000, 2000)
+    await service.ingest_segment(run.id, Segment(text="pagi", start_ms=1000, end_ms=2000))
     annotated = await service.annotate_speakers(
         run.id, [Segment(text="x", start_ms=0, end_ms=3000, speaker=None)]
     )
