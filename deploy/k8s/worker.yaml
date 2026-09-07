@@ -23,7 +23,7 @@ spec:
           imagePullPolicy: IfNotPresent
           # Headed Chromium under a virtual framebuffer — the humanization
           # layer needs a real rendering path, not bare headless.
-          command: ["xvfb-run", "-a", "python", "-m", "twin.worker"]
+          command: ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & sleep 2 && DISPLAY=:99 python -m twin.worker"]
           envFrom:
             - secretRef: {name: twin-secrets}
           resources:
