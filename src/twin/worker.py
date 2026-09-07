@@ -7,7 +7,8 @@ import structlog
 from redis.asyncio import from_url
 
 from twin.bots.queue import ack_run, claim_run, ensure_group, reclaim_stale
-from twin.bots.runner import RunContext, execute_run, fail_run, sweep_orphans
+from twin.bots.runner import execute_run, sweep_orphans
+from twin.bots.runtime import RunContext, fail_run
 from twin.core.config import get_settings
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker

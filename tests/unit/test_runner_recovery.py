@@ -3,7 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from twin.bots.models import BotRun
-from twin.bots.runner import RunContext, _complete, is_orphan, sweep_orphans
+from twin.bots.runner import is_orphan, sweep_orphans
+from twin.bots.runtime import RunContext, _complete
 from twin.bots.state import BotStatus
 from twin.core.config import Settings
 

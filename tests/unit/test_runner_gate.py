@@ -1,6 +1,6 @@
 import pytest
 
-from twin.bots.runner import _capture_gate
+from twin.bots.runtime import _capture_gate
 
 
 class FakePage:
