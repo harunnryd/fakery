@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from twin.api.deps import get_bot_service, get_redis
-from twin.bots.models import BotRun
-from twin.bots.service import BotService
+from twin.api.deps import get_bot_service, get_redis, get_subscription_service
+from twin.bots.models import BotRun, WebhookSubscription
+from twin.bots.service import BotService, SubscriptionService
 from twin.main import create_app
 
 
@@ -21,6 +21,23 @@ class FakeRepo:
 
     async def segments(self, bot_id: str) -> list:
         return self._segments.get(bot_id, [])
+
+    async def add_segment(self, segment) -> None:
+        self._segments.setdefault(segment.bot_run_id, []).append(segment)
+
+
+class FakeSubscriptions:
+    def __init__(self) -> None:
+        self.items: dict[str, WebhookSubscription] = {}
+
+    async def add(self, subscription: WebhookSubscription) -> None:
+        self.items[subscription.id] = subscription
+
+    async def list(self) -> list[WebhookSubscription]:
+        return list(self.items.values())
+
+    async def remove(self, subscription_id: str) -> WebhookSubscription | None:
+        return self.items.pop(subscription_id, None)
 
 
 class FakeRedis:
@@ -90,3 +107,37 @@ def test_transcript_of_known_bot_starts_empty() -> None:
         response = client.get(f"/v1/bots/{created['id']}/transcript")
     assert response.status_code == 200
     assert response.json() == {"bot_id": created["id"], "segments": []}
+
+
+def _webhook_client() -> TestClient:
+    app = create_app()
+    subscriptions = SubscriptionService(FakeSubscriptions())
+    app.dependency_overrides[get_bot_service] = lambda: BotService(FakeRepo())
+    app.dependency_overrides[get_redis] = lambda: FakeRedis()
+    app.dependency_overrides[get_subscription_service] = lambda: subscriptions
+    return TestClient(app)
+
+
+def test_webhook_lifecycle() -> None:
+    with _webhook_client() as client:
+        created = client.post("/v1/webhooks", json={"url": "https://client.example/hook"}).json()
+        assert created["id"].startswith("wh_")
+        listed = client.get("/v1/webhooks").json()
+        assert [sub["id"] for sub in listed] == [created["id"]]
+        deleted = client.delete(f"/v1/webhooks/{created['id']}")
+        assert deleted.status_code == 204
+        assert client.get("/v1/webhooks").json() == []
+
+
+def test_webhook_rejects_bad_url_as_validation_problem() -> None:
+    with _webhook_client() as client:
+        response = client.post("/v1/webhooks", json={"url": "not-a-url"})
+    assert response.status_code == 422
+    assert response.json()["type"].endswith("/validation-failed")
+
+
+def test_webhook_delete_unknown_returns_not_found_problem() -> None:
+    with _webhook_client() as client:
+        response = client.delete("/v1/webhooks/wh_missing")
+    assert response.status_code == 404
+    assert response.json()["type"].endswith("/not-found")
