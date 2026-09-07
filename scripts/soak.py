@@ -26,9 +26,7 @@ def _row(bot_id: str, name: str, status: dict, started: float) -> dict:
 async def drive_one(
     client: httpx.AsyncClient, url: str, name: str, max_minutes: float, record_seconds: float
 ) -> dict:
-    response = await client.post(
-        "/v1/bots", json={"meeting_url": url, "display_name": name}
-    )
+    response = await client.post("/v1/bots", json={"meeting_url": url, "display_name": name})
     response.raise_for_status()
     bot = response.json()
     bot_id = bot["id"]
@@ -68,9 +66,7 @@ async def main() -> None:
         for index in range(1, args.count + 1):
             name = f"{args.name} {index:02d}"
             print(f"[soak] join {index}/{args.count}: {name}", flush=True)
-            outcome = await drive_one(
-                client, args.url, name, args.max_min, args.record_seconds
-            )
+            outcome = await drive_one(client, args.url, name, args.max_min, args.record_seconds)
             results.append(outcome)
             print(f"[soak] {outcome}", flush=True)
             if index < args.count:
@@ -84,8 +80,7 @@ async def main() -> None:
     print(f"  gated:     {gated}")
     for row in results:
         print(
-            f"  {row['bot_id']} {row['status']:>12} "
-            f"{str(row.get('error_code')):>24} {row['name']}"
+            f"  {row['bot_id']} {row['status']:>12} {str(row.get('error_code')):>24} {row['name']}"
         )
 
 
