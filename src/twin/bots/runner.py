@@ -1,24 +1,29 @@
 import asyncio
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import structlog
 from redis.asyncio import Redis
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from twin.bots.models import BotRun
 from twin.bots.queue import (
     acquire_lease,
     beat,
     clear_beat,
+    heartbeat_key,
     is_cancelled,
     lease_key,
     release_lease,
 )
 from twin.bots.service import BotService, SqlalchemyBotRepository
-from twin.bots.state import BotStatus
+from twin.bots.state import LIVE_STATUSES, BotStatus
 from twin.core.config import Settings
+from twin.core.time import utcnow
 from twin.meet import join_flow
 from twin.meet.launcher import CloakBrowser, EngineConfig
 from twin.meet.profile_prep import init_profile_defaults
@@ -275,3 +280,40 @@ def _should_stop(context: RunContext, bot_id: str):
         return await is_cancelled(context.redis, bot_id)
 
     return check
+
+
+def is_orphan(
+    status: BotStatus, updated_at: datetime, heartbeat: bool, now: datetime, stale_after_s: int
+) -> bool:
+    if status not in LIVE_STATUSES or heartbeat:
+        return False
+    return (now - updated_at).total_seconds() > stale_after_s
+
+
+async def sweep_orphans(
+    session_factory: async_sessionmaker,
+    redis: Redis,
+    stale_after_s: int,
+    now: datetime | None = None,
+) -> int:
+    moment = now or utcnow()
+    cutoff = moment - timedelta(seconds=stale_after_s)
+    live = {status.value for status in LIVE_STATUSES}
+    reaped = 0
+    async with session_scope(session_factory) as session:
+        rows = await session.execute(
+            select(BotRun).where(BotRun.status.in_(live), BotRun.updated_at < cutoff)
+        )
+        for run in list(rows.scalars()):
+            if await redis.get(heartbeat_key(run.id)):
+                continue
+            if not is_orphan(BotStatus(run.status), run.updated_at, False, moment, stale_after_s):
+                continue
+            run.status = BotStatus.FAILED.value
+            run.error_code = "orphaned"
+            run.left_at = moment
+            reaped += 1
+        await session.commit()
+    if reaped:
+        logger.info("run.sweep_reaped", count=reaped)
+    return reaped

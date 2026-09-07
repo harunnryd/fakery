@@ -13,6 +13,11 @@ class BotStatus(StrEnum):
     FAILED = "failed"
 
 
+LIVE_STATUSES = frozenset(
+    {BotStatus.JOINING, BotStatus.JOINED, BotStatus.RECORDING, BotStatus.PROCESSING}
+)
+
+
 _ALLOWED: dict[BotStatus, frozenset[BotStatus]] = {
     BotStatus.QUEUED: frozenset({BotStatus.JOINING, BotStatus.FAILED}),
     BotStatus.JOINING: frozenset({BotStatus.JOINED, BotStatus.FAILED}),

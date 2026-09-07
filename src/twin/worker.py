@@ -7,7 +7,7 @@ import structlog
 from redis.asyncio import from_url
 
 from twin.bots.queue import ack_run, claim_run, ensure_group, reclaim_stale
-from twin.bots.runner import RunContext, execute_run, fail_run
+from twin.bots.runner import RunContext, execute_run, fail_run, sweep_orphans
 from twin.core.config import get_settings
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
@@ -15,6 +15,8 @@ from twin.storage.profiles import validate_key
 
 CONSUMER = f"worker-{os.getpid()}"
 ANTI_CHURN_GUEST_GAP_S = 240
+SWEEP_INTERVAL_S = 60
+ORPHAN_STALE_S = 300
 logger = structlog.get_logger(__name__)
 
 
@@ -47,8 +49,15 @@ async def main() -> None:
     logger.info("worker.started", consumer=CONSUMER, guest_tier=guest_tier)
 
     last_claim_at = 0.0
+    last_sweep_at = 0.0
     try:
         while True:
+            if time.monotonic() - last_sweep_at >= SWEEP_INTERVAL_S:
+                last_sweep_at = time.monotonic()
+                try:
+                    await sweep_orphans(session_factory, redis, ORPHAN_STALE_S)
+                except Exception as err:
+                    logger.warning("worker.sweep_failed", error=str(err))
             claimed = await reclaim_stale(redis, CONSUMER) or await claim_run(redis, CONSUMER)
             if claimed is None:
                 continue
