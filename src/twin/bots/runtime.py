@@ -272,10 +272,11 @@ async def _attend_and_record(
     transcriber = context.transcriber if context.settings.record_audio else None
     chunk_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
     transcribe_task: asyncio.Task | None = None
+    probe_task: asyncio.Task | None = None
     if context.settings.record_audio:
         recorder = MeetingRecorder(page, sink=chunk_queue.put_nowait)
         await recorder.start()
-        asyncio.create_task(_participant_probe(page))
+        probe_task = asyncio.create_task(_participant_probe(page))
         if transcriber is not None:
             transcribe_task = asyncio.create_task(
                 _transcribe_live(bot_id, context, transcriber, _queue_chunks(chunk_queue))
@@ -289,6 +290,12 @@ async def _attend_and_record(
     logger.info("run.meeting_ended", bot_id=bot_id, reason=reason)
 
     recording = await recorder.stop() if recorder is not None else b""
+    if probe_task is not None:
+        probe_task.cancel()
+        try:
+            await probe_task
+        except asyncio.CancelledError:
+            pass
     chunk_queue.put_nowait(None)
     live_count = await _await_transcript(transcribe_task, bot_id)
     if recording and transcriber is not None:
