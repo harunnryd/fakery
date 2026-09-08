@@ -2,9 +2,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from twin.bots.models import BotRun, TranscriptSegment
+from twin.bots.models import BotRun, MeetingNote, TranscriptSegment
 from twin.bots.service import BotService
 from twin.bots.state import BotStatus
+from twin.notes.summarizer import ActionItem, MeetingNotes
 from twin.transcription.transcriber import Segment
 
 
@@ -12,6 +13,7 @@ class FakeEvents:
     def __init__(self) -> None:
         self.statuses: list[tuple[str, str]] = []
         self.segments: list[TranscriptSegment] = []
+        self.notes: list[str] = []
 
     async def status_changed(self, bot_id: str, status: str) -> None:
         self.statuses.append((bot_id, status))
@@ -19,11 +21,15 @@ class FakeEvents:
     async def transcript_segment(self, segment: TranscriptSegment) -> None:
         self.segments.append(segment)
 
+    async def notes_completed(self, bot_id: str) -> None:
+        self.notes.append(bot_id)
+
 
 class FakeRepo:
     def __init__(self) -> None:
         self.runs: dict[str, BotRun] = {}
         self.saved: list[TranscriptSegment] = []
+        self.notes: dict[str, MeetingNote] = {}
 
     async def add(self, run: BotRun) -> None:
         self.runs[run.id] = run
@@ -36,6 +42,12 @@ class FakeRepo:
 
     async def add_segment(self, segment: TranscriptSegment) -> None:
         self.saved.append(segment)
+
+    async def save_notes(self, note: MeetingNote) -> None:
+        self.notes[note.bot_run_id] = note
+
+    async def get_notes(self, bot_id: str) -> MeetingNote | None:
+        return self.notes.get(bot_id)
 
     async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
         count = 0
@@ -121,3 +133,27 @@ async def test_annotate_skips_speakerless_batch() -> None:
         run.id, [Segment(text="x", start_ms=0, end_ms=3000, speaker=None)]
     )
     assert annotated == 0
+
+
+async def test_store_notes_roundtrip() -> None:
+    service, _ = _service(None)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    note = await service.store_notes(
+        run.id,
+        MeetingNotes(
+            summary="standup",
+            key_points=["rilis"],
+            action_items=[ActionItem(text="kirim", owner="Dina", due=None)],
+        ),
+    )
+    assert note.bot_run_id == run.id
+    stored = await service.get_notes(run.id)
+    assert stored.summary == "standup"
+    assert stored.action_items == [{"text": "kirim", "owner": "Dina", "due": None}]
+
+
+async def test_get_notes_missing_is_not_found() -> None:
+    service, _ = _service(None)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    with pytest.raises(Exception, match="notes for"):
+        await service.get_notes(run.id)

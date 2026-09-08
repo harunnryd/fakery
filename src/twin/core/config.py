@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     stt_diarize: bool = True
     stt_language: str = "en"
     llm_api_key: str = ""
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4o-mini"
 
     webhook_signing_secret: str = ""
 

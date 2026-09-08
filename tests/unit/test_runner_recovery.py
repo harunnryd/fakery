@@ -122,7 +122,7 @@ async def test_sweep_reaps_only_stale_runs_without_beat() -> None:
 )
 async def test_complete_marks_cancelled_runs(cancelled: bool, expected_code: str | None) -> None:
     moment = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
-    run = _run_at("recording", moment, "bot_x")
+    run = _run_at("processing", moment, "bot_x")
     session = FakeSession(run=run)
     context = RunContext(
         session_factory=lambda: session,  # type: ignore[return-value]

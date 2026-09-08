@@ -1,15 +1,17 @@
 import uuid
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime
 from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from twin.bots.models import BotRun, TranscriptSegment, WebhookSubscription
+from twin.bots.models import BotRun, MeetingNote, TranscriptSegment, WebhookSubscription
 from twin.bots.state import BotStatus, require_transition
 from twin.core.errors import make_error
 from twin.core.time import utcnow
+from twin.notes.summarizer import MeetingNotes
 from twin.transcription.transcriber import Segment
 from twin.webhooks.dispatch import EventSink
 
@@ -26,6 +28,10 @@ class BotRepository(Protocol):
     async def annotate_speakers(
         self, bot_id: str, start_ms: int, end_ms: int, speaker: str
     ) -> int: ...
+
+    async def save_notes(self, note: MeetingNote) -> None: ...
+
+    async def get_notes(self, bot_id: str) -> MeetingNote | None: ...
 
 
 class SqlalchemyBotRepository:
@@ -50,6 +56,13 @@ class SqlalchemyBotRepository:
     async def add_segment(self, segment: TranscriptSegment) -> None:
         self._session.add(segment)
         await self._session.commit()
+
+    async def save_notes(self, note: MeetingNote) -> None:
+        self._session.add(note)
+        await self._session.commit()
+
+    async def get_notes(self, bot_id: str) -> MeetingNote | None:
+        return await self._session.get(MeetingNote, bot_id)
 
     async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
         rows = await self._session.execute(
@@ -181,6 +194,23 @@ class BotService:
                 bot_id, segment.start_ms, segment.end_ms, segment.speaker
             )
         return annotated
+
+    async def store_notes(self, bot_id: str, notes: MeetingNotes) -> MeetingNote:
+        note = MeetingNote(
+            bot_run_id=bot_id,
+            summary=notes.summary,
+            key_points=list(notes.key_points),
+            action_items=[asdict(item) for item in notes.action_items],
+            created_at=self._clock(),
+        )
+        await self._repo.save_notes(note)
+        return note
+
+    async def get_notes(self, bot_id: str) -> MeetingNote:
+        note = await self._repo.get_notes(bot_id)
+        if note is None:
+            raise make_error("not-found", detail=f"notes for {bot_id} do not exist")
+        return note
 
     async def advance(self, bot_id: str, target: BotStatus) -> BotRun:
         run = await self.get(bot_id)

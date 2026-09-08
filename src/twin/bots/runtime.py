@@ -27,6 +27,7 @@ from twin.meet import join_flow
 from twin.meet.launcher import CloakBrowser, EngineConfig
 from twin.meet.profile_prep import init_profile_defaults
 from twin.meet.recorder import RECORDER_HOOK, MeetingRecorder, arm_via_cdp_eval
+from twin.notes.summarizer import Summarizer, launch_summarizer
 from twin.storage.blob import BlobStore
 from twin.storage.database import session_scope
 from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
@@ -43,6 +44,7 @@ HEARTBEAT_INTERVAL_S = 30
 PROFILE_CONTENT_TYPE = "application/gzip"
 TRANSCRIBE_DRAIN_S = 120
 SPEAKER_MIN_SHARE = 0.15
+SUMMARY_ATTEMPTS = 3
 
 
 @dataclass(slots=True)
@@ -54,6 +56,7 @@ class RunContext:
     owner: str = ""
     transcriber: Transcriber | None = None
     events: EventSink | None = None
+    summarizer: Summarizer | None = None
 
 
 @dataclass(slots=True)
@@ -152,7 +155,15 @@ def build_context(
         owner=owner,
         transcriber=_transcriber(settings),
         events=WebhookDispatcher(session_factory, settings.webhook_signing_secret),
+        summarizer=_summarizer(settings),
     )
+
+
+def _summarizer(settings: Settings) -> Summarizer | None:
+    if not settings.llm_api_key:
+        logger.warning("run.notes_disabled", reason="no-key")
+        return None
+    return launch_summarizer(settings.llm_provider, settings.llm_api_key, settings.llm_model)
 
 
 def _transcriber(settings: Settings) -> Transcriber | None:
@@ -212,6 +223,8 @@ async def attend(
                 page, bot_id, context, meeting_url, display_name, launch
             )
             await join_flow.leave_meeting(page)
+            await _advance(bot_id, context, BotStatus.PROCESSING)
+            await _summarize(bot_id, context)
             await _complete(bot_id, context, recording, cancelled=reason == join_flow.END_CANCELLED)
             logger.info("run.completed", bot_id=bot_id, recording_bytes=len(recording))
         except join_flow.JoinError:
@@ -400,11 +413,37 @@ async def _advance(bot_id: str, context: RunContext, status: BotStatus) -> None:
         await _service(session, context).advance(bot_id, status)
 
 
+async def _summarize(bot_id: str, context: RunContext) -> None:
+    if context.summarizer is None:
+        return
+    async with session_scope(context.session_factory) as session:
+        transcript = await _service(session, context).transcript(bot_id)
+    if not transcript:
+        return
+    segments = [
+        Segment(text=row.text, start_ms=row.start_ms, end_ms=row.end_ms, speaker=row.speaker)
+        for row in transcript
+    ]
+    notes = None
+    for attempt in range(SUMMARY_ATTEMPTS):
+        try:
+            notes = await context.summarizer.summarize(segments)
+            break
+        except Exception as err:
+            logger.warning(
+                "notes.attempt_failed", bot_id=bot_id, attempt=attempt + 1, error=str(err)
+            )
+    if notes is None:
+        logger.error("notes.exhausted", bot_id=bot_id)
+        return
+    async with session_scope(context.session_factory) as session:
+        await _service(session, context).store_notes(bot_id, notes)
+
+
 async def _complete(bot_id: str, context: RunContext, recording: bytes, cancelled: bool) -> None:
     async with session_scope(context.session_factory) as session:
         service = _service(session, context)
         run = await service.get(bot_id)
-        await service.advance(bot_id, BotStatus.PROCESSING)
         if recording:
             run.recording_sha256 = hashlib.sha256(recording).hexdigest()
             if context.blob is not None:
