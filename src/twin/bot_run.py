@@ -4,7 +4,14 @@ import sys
 import structlog
 from redis.asyncio import from_url
 
-from twin.bots.runtime import _prepare_launch, _service, attend, build_context, fail_run
+from twin.bots.runtime import (
+    _prepare_launch,
+    _service,
+    attend,
+    build_context,
+    fail_run,
+    handle_sigterm,
+)
 from twin.core.config import get_settings
 from twin.meet import join_flow
 from twin.storage.blob import MinioBlobStore
@@ -16,6 +23,7 @@ logger = structlog.get_logger(__name__)
 
 async def _run(bot_id: str) -> int:
     settings = get_settings()
+    handle_sigterm()
     if settings.profile_encryption_key:
         validate_key(settings.profile_encryption_key)
     engine, session_factory = create_engine_and_sessionmaker(settings.database_url)

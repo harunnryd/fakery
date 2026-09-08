@@ -11,13 +11,12 @@ JOB_TTL_S = 300
 JOB_BACKOFF_LIMIT = 0
 JOB_STARTUP_GRACE_S = 600
 JOB_POLL_S = 10
+JOB_GRACE_PERIOD_S = 120
 JOB_SECRET_NAME = "twin-secrets"
 JOB_MEMORY_REQUEST = "2Gi"
 JOB_MEMORY_LIMIT = "3Gi"
 JOB_CPU_REQUEST = "500m"
-JOB_XVFB_COMMAND = (
-    "Xvfb :99 -screen 0 1280x720x24 -nolisten tcp & sleep 2 && DISPLAY=:99 python -m twin.bot_run"
-)
+JOB_XVFB_COMMAND = ["xvfb-run", "-a", "python", "-m", "twin.bot_run"]
 
 
 def bot_job_name(bot_id: str) -> str:
@@ -44,12 +43,13 @@ def build_bot_job(bot_id: str, image: str, namespace: str, meeting_max_minutes: 
                 "metadata": {"labels": labels},
                 "spec": {
                     "restartPolicy": "Never",
+                    "terminationGracePeriodSeconds": JOB_GRACE_PERIOD_S,
                     "containers": [
                         {
                             "name": "bot",
                             "image": image,
                             "imagePullPolicy": "IfNotPresent",
-                            "command": ["sh", "-c", f"{JOB_XVFB_COMMAND} {bot_id}"],
+                            "command": [*JOB_XVFB_COMMAND, bot_id],
                             "envFrom": [{"secretRef": {"name": JOB_SECRET_NAME}}],
                             "resources": {
                                 "requests": {

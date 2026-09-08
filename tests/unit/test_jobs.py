@@ -104,7 +104,7 @@ def test_build_bot_job_carries_run_identity(minutes: int, expected_deadline: int
     assert manifest["metadata"]["labels"]["twin.bot/id"] == "bot_abc123"
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "fakery:dev"
-    assert "python -m twin.bot_run bot_abc123" in container["command"][2]
+    assert container["command"][-2:] == ["twin.bot_run", "bot_abc123"]
     assert manifest["spec"]["backoffLimit"] == 0
     assert manifest["spec"]["ttlSecondsAfterFinished"] == 300
     assert manifest["spec"]["activeDeadlineSeconds"] == expected_deadline

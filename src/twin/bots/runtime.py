@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import signal
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import partial
@@ -482,9 +483,26 @@ async def fail_run(bot_id: str, context: RunContext, code: str) -> None:
 
 def _should_stop(context: RunContext, bot_id: str):
     async def check() -> bool:
+        if SHUTDOWN_EVENT.is_set():
+            return True
         return await is_cancelled(context.redis, bot_id)
 
     return check
+
+
+SHUTDOWN_EVENT: asyncio.Event = asyncio.Event()
+
+
+def _on_sigterm() -> None:
+    SHUTDOWN_EVENT.set()
+
+
+def handle_sigterm() -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
 
 
 def _missing_blob_key(err: Exception) -> bool:
