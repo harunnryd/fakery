@@ -38,6 +38,23 @@ class TranscriptResponse(BaseModel):
     segments: list[TranscriptSegmentResource]
 
 
+class ActionItemResource(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    text: str
+    owner: str | None = None
+    due: str | None = None
+
+
+class NotesResource(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    bot_run_id: str
+    summary: str
+    key_points: list[str]
+    action_items: list[ActionItemResource]
+
+
 class BotListResponse(BaseModel):
     bots: list[BotResource]
     next_cursor: str | None = None

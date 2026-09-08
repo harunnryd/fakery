@@ -5,6 +5,7 @@ from twin.api.schemas import (
     BotListResponse,
     BotResource,
     CreateBotRequest,
+    NotesResource,
     TranscriptResponse,
     TranscriptSegmentResource,
 )
@@ -56,3 +57,9 @@ async def get_bot_transcript(bot_id: BotIdDep, service: BotServiceDep) -> Transc
         bot_id=bot_id,
         segments=[TranscriptSegmentResource.model_validate(seg) for seg in segments],
     )
+
+
+@router.get("/bots/{bot_id}/notes")
+async def get_bot_notes(bot_id: BotIdDep, service: BotServiceDep) -> NotesResource:
+    note = await service.get_notes(bot_id)
+    return NotesResource.model_validate(note)

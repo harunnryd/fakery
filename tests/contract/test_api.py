@@ -13,6 +13,7 @@ class FakeRepo:
     def __init__(self) -> None:
         self.runs: dict[str, BotRun] = {}
         self._segments: dict[str, list] = {}
+        self._notes: dict = {}
 
     async def add(self, run: BotRun) -> None:
         self.runs[run.id] = run
@@ -25,6 +26,12 @@ class FakeRepo:
 
     async def add_segment(self, segment) -> None:
         self._segments.setdefault(segment.bot_run_id, []).append(segment)
+
+    async def save_notes(self, note) -> None:
+        self._notes[note.bot_run_id] = note
+
+    async def get_notes(self, bot_id: str):
+        return self._notes.get(bot_id)
 
     async def list_runs(self, limit: int, cursor: str | None) -> list[BotRun]:
         ordered = sorted(self.runs.values(), key=lambda run: (run.created_at, run.id), reverse=True)
@@ -201,3 +208,29 @@ def test_list_bots_paginates_by_cursor() -> None:
         second = client.get(f"/v1/bots?limit=2&cursor={first['next_cursor']}").json()
         assert len(second["bots"]) == 1
         assert second["next_cursor"] is None
+
+
+async def test_notes_roundtrip() -> None:
+    from twin.notes.summarizer import ActionItem, MeetingNotes
+
+    repo = FakeRepo()
+    service = BotService(repo)
+    app = create_app()
+    app.dependency_overrides[get_bot_service] = lambda: service
+    app.dependency_overrides[get_redis] = lambda: FakeRedis()
+    with TestClient(app) as client:
+        created = client.post(
+            "/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"}
+        ).json()
+        assert client.get(f"/v1/bots/{created['id']}/notes").status_code == 404
+        await service.store_notes(
+            created["id"],
+            MeetingNotes(
+                summary="standup",
+                key_points=["rilis"],
+                action_items=[ActionItem(text="kirim", owner="Dina", due=None)],
+            ),
+        )
+        notes = client.get(f"/v1/bots/{created['id']}/notes").json()
+        assert notes["summary"] == "standup"
+        assert notes["action_items"] == [{"text": "kirim", "owner": "Dina", "due": None}]
