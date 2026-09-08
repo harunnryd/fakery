@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     tenant: str = "default"
     api_key: str = ""
+    max_concurrent_runs: int = 3
     retention_days: int = 30
     retention_dry_run: bool = True
 

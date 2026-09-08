@@ -50,9 +50,22 @@ async def drive_one(
     return _row(bot_id, name, {"status": "poll-timeout", "error_code": None}, started)
 
 
+async def _drive_index(
+    client: httpx.AsyncClient, args: argparse.Namespace, urls: list[str], index: int
+) -> dict:
+    name = f"{args.name} {index:02d}"
+    url = urls[(index - 1) % len(urls)]
+    print(f"[soak] join {index}/{args.count}: {name} {url}", flush=True)
+    outcome = await drive_one(client, url, name, args.max_min, args.record_seconds)
+    print(f"[soak] {outcome}", flush=True)
+    return outcome
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True)
+    parser.add_argument("--urls", default="")
+    parser.add_argument("--parallel", type=int, default=1)
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--interval-min", type=float, default=DEFAULT_INTERVAL_MIN)
     parser.add_argument("--max-min", type=float, default=50.0)
@@ -62,15 +75,23 @@ async def main() -> None:
     args = parser.parse_args()
 
     results: list[dict] = []
+    urls = [url.strip() for url in args.urls.split(",") if url.strip()] or [args.url]
     async with httpx.AsyncClient(base_url=args.api, timeout=30) as client:
-        for index in range(1, args.count + 1):
-            name = f"{args.name} {index:02d}"
-            print(f"[soak] join {index}/{args.count}: {name}", flush=True)
-            outcome = await drive_one(client, args.url, name, args.max_min, args.record_seconds)
-            results.append(outcome)
-            print(f"[soak] {outcome}", flush=True)
-            if index < args.count:
-                await asyncio.sleep(args.interval_min * 60)
+        if args.parallel <= 1:
+            for index in range(1, args.count + 1):
+                results.append(await _drive_index(client, args, urls, index))
+                if index < args.count:
+                    await asyncio.sleep(args.interval_min * 60)
+        else:
+            semaphore = asyncio.Semaphore(args.parallel)
+
+            async def _guarded(index: int) -> dict:
+                async with semaphore:
+                    return await _drive_index(client, args, urls, index)
+
+            results = list(
+                await asyncio.gather(*(_guarded(index) for index in range(1, args.count + 1)))
+            )
 
     admitted = sum(1 for r in results if r["status"] == "completed")
     gated = sum(1 for r in results if r.get("error_code") == "join-gated")

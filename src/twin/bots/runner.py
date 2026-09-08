@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 
 import structlog
@@ -14,11 +15,18 @@ from twin.storage.database import session_scope
 
 logger = structlog.get_logger(__name__)
 
+ADMIT_POLL_S = 30
+ADMIT_WAIT_S = 600
+
 
 async def execute_run(bot_id: str, context: RunContext) -> None:
     settings = context.settings
     if context.redis is not None and await is_cancelled(context.redis, bot_id):
         await fail_run(bot_id, context, "cancelled")
+        return
+
+    if not await _wait_for_capacity(context, bot_id):
+        await fail_run(bot_id, context, "at-capacity")
         return
 
     lease = lease_key(settings.tenant, PLATFORM_MEET, _tier(settings))
@@ -42,6 +50,24 @@ def is_orphan(
     if status not in LIVE_STATUSES or heartbeat:
         return False
     return (now - updated_at).total_seconds() > stale_after_s
+
+
+async def count_live_runs(context: RunContext) -> int:
+    live = {status.value for status in LIVE_STATUSES}
+    async with session_scope(context.session_factory) as session:
+        rows = await session.execute(select(BotRun).where(BotRun.status.in_(live)))
+        return len(list(rows.scalars()))
+
+
+async def _wait_for_capacity(context: RunContext, bot_id: str) -> bool:
+    waited = 0
+    while await count_live_runs(context) >= context.settings.max_concurrent_runs:
+        if waited >= ADMIT_WAIT_S:
+            return False
+        logger.info("run.deferred", bot_id=bot_id, waited_s=waited)
+        await asyncio.sleep(ADMIT_POLL_S)
+        waited += ADMIT_POLL_S
+    return True
 
 
 async def sweep_orphans(
