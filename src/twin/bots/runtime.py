@@ -34,7 +34,7 @@ from twin.storage.database import session_scope
 from twin.storage.profiles import pack_profile, profile_key, seal, unpack_profile, unseal
 from twin.transcription.decode import decode_webm
 from twin.transcription.transcriber import Segment, Transcriber, launch_transcriber
-from twin.webhooks.dispatch import EventSink, WebhookDispatcher
+from twin.webhooks.dispatch import DbOutbox, EventSink
 
 logger = structlog.get_logger(__name__)
 
@@ -155,7 +155,7 @@ def build_context(
         redis=redis,
         owner=owner,
         transcriber=_transcriber(settings),
-        events=WebhookDispatcher(session_factory, settings.webhook_signing_secret),
+        events=DbOutbox(session_factory),
         summarizer=_summarizer(settings),
     )
 

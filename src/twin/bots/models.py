@@ -65,3 +65,14 @@ class WebhookSubscription(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     url: Mapped[str] = mapped_column(String(512), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    attempts: Mapped[int] = mapped_column(default=0)
+    next_try_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

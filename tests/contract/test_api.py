@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from twin.api.deps import get_bot_service, get_redis, get_subscription_service
+from twin.api.deps import get_bot_service, get_redis, get_subscription_service, require_api_key
 from twin.bots.models import BotRun, WebhookSubscription
 from twin.bots.service import BotService, SubscriptionService
 from twin.core.config import Settings
@@ -72,6 +72,7 @@ def _client_with(service: BotService) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_bot_service] = lambda: service
     app.dependency_overrides[get_redis] = lambda: FakeRedis()
+    app.dependency_overrides[require_api_key] = lambda: None
     return TestClient(app)
 
 
@@ -134,6 +135,7 @@ def _webhook_client() -> TestClient:
     subscriptions = SubscriptionService(FakeSubscriptions())
     app.dependency_overrides[get_bot_service] = lambda: BotService(FakeRepo())
     app.dependency_overrides[get_redis] = lambda: FakeRedis()
+    app.dependency_overrides[require_api_key] = lambda: None
     app.dependency_overrides[get_subscription_service] = lambda: subscriptions
     return TestClient(app)
 
@@ -218,6 +220,7 @@ async def test_notes_roundtrip() -> None:
     app = create_app()
     app.dependency_overrides[get_bot_service] = lambda: service
     app.dependency_overrides[get_redis] = lambda: FakeRedis()
+    app.dependency_overrides[require_api_key] = lambda: None
     with TestClient(app) as client:
         created = client.post(
             "/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"}

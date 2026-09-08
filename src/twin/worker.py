@@ -13,6 +13,7 @@ from twin.core.config import get_settings
 from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
 from twin.storage.profiles import validate_key
+from twin.webhooks.dispatch import OUTBOX_POLL_S, WebhookSender
 
 CONSUMER = f"worker-{os.getpid()}"
 ANTI_CHURN_GUEST_GAP_S = 240
@@ -39,12 +40,14 @@ async def main() -> None:
         settings.blob_bucket,
     )
     context = build_context(session_factory, settings, blob, redis, CONSUMER)
+    sender = WebhookSender(session_factory, settings.webhook_signing_secret)
     guest_tier = not Path(settings.browser_profile_dir).expanduser().exists()
     await ensure_group(redis)
     logger.info("worker.started", consumer=CONSUMER, guest_tier=guest_tier)
 
     last_claim_at = 0.0
     last_sweep_at = 0.0
+    last_send_at = 0.0
     try:
         while True:
             if time.monotonic() - last_sweep_at >= SWEEP_INTERVAL_S:
@@ -53,6 +56,12 @@ async def main() -> None:
                     await sweep_orphans(session_factory, redis, ORPHAN_STALE_S)
                 except Exception as err:
                     logger.warning("worker.sweep_failed", error=str(err))
+            if time.monotonic() - last_send_at >= OUTBOX_POLL_S:
+                last_send_at = time.monotonic()
+                try:
+                    await sender.run_once(redis)
+                except Exception as err:
+                    logger.warning("worker.send_failed", error=str(err))
             claimed = await reclaim_stale(redis, CONSUMER) or await claim_run(redis, CONSUMER)
             if claimed is None:
                 continue
