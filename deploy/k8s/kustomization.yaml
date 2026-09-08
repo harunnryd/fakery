@@ -14,5 +14,6 @@ resources:
   - redis.yaml
   - minio.yaml
   - migrate-job.yaml
+  - retention-cronjob.yaml
   - api.yaml
   - worker.yaml

@@ -1,6 +1,15 @@
 import asyncio
 import io
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
+
+
+@dataclass(slots=True)
+class BlobObject:
+    key: str
+    size: int
+    modified: datetime
 
 
 class BlobStore(Protocol):
@@ -9,6 +18,10 @@ class BlobStore(Protocol):
     ) -> str: ...
 
     async def get(self, key: str) -> bytes: ...
+
+    async def list(self, prefix: str) -> list[BlobObject]: ...
+
+    async def remove(self, key: str) -> None: ...
 
 
 class MinioBlobStore:
@@ -40,3 +53,16 @@ class MinioBlobStore:
         finally:
             await asyncio.to_thread(response.close)
             await asyncio.to_thread(response.release_conn)
+
+    async def list(self, prefix: str) -> list[BlobObject]:
+        objects = await asyncio.to_thread(
+            lambda: list(self._client.list_objects(self._bucket, prefix=prefix, recursive=True))
+        )
+        return [
+            BlobObject(key=obj.object_name or "", size=obj.size or 0, modified=obj.last_modified)
+            for obj in objects
+            if obj.object_name is not None and obj.last_modified is not None
+        ]
+
+    async def remove(self, key: str) -> None:
+        await asyncio.to_thread(self._client.remove_object, self._bucket, key)

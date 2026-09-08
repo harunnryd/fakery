@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     tenant: str = "default"
     api_key: str = ""
+    retention_days: int = 30
+    retention_dry_run: bool = True
 
     database_url: str = "postgresql+asyncpg://twin:twin@localhost:5432/twin"
     redis_url: str = "redis://localhost:6379/0"
