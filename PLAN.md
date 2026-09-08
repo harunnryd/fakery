@@ -155,13 +155,15 @@ never speaks autonomously — silence is the default state.
 - `[x]` **Exclusive lease per profile (Redis, TTL)**: the same profile
   can never run on two bots at once, making the same-account
   double-join trap impossible by construction.
-- `[ ]` Retention rule: raw audio 30 days, then purge (M4 job).
+- `[x]` Retention rule: raw audio 30 days, then purge — weekly CronJob,
+  dry-run first (M4).
 
-### 9. `webhooks/` — real delivery (M2: status + segments, M3: notes)
+### 9. `webhooks/` — real delivery (M2: status + segments, M3: notes, M4: outbox)
 - `[x]` `webhook_subscriptions` table + API CRUD (URL per client).
 - `[x]` Emit `bot.status_changed` on every transition,
   `transcript.segment` on new segments, `notes.completed` at the end.
 - `[x]` Delivery retry policy + failure logging.
+- `[x]` Outbox with ordered per-bot sender, dead-lettering, row TTL (M4).
 
 ### 10. `api/` — complete the surface (auth, list, notes shipped)
 - `[x]` API-key auth (`X-API-Key`, keys seeded via env/config).
@@ -321,8 +323,10 @@ Layered posture:
 - **M3 — Automatic notes:** modules 5 + 9 (rest) + 10. Exit: external
   client integrates end-to-end: create bot → webhooks → transcript +
   notes, authenticated.
-- **M4 — Operational hardening:** cancellation, orphan recovery,
-  retention job, pagination edge cases, load check (K density per box).
+- **M4 — Operational hardening:** admission control, unified
+  graceful shutdown, retention sweeper, webhook outbox (cancellation,
+  orphans, and pagination already live from M1–M3; load numbers still
+  to be measured).
 - **M5 — Speaks when woken (decided in scope):** module 7 (voice) +
   meet chat channel + sink playback. Exit: the twin answers a woken
   question audibly in the meeting, stays fully silent otherwise, and
