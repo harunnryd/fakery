@@ -136,7 +136,8 @@ async def test_annotate_skips_speakerless_batch() -> None:
 
 
 async def test_store_notes_roundtrip() -> None:
-    service, _ = _service(None)
+    events = FakeEvents()
+    service, _ = _service(events)
     run = await service.create("https://meet.google.com/abc-defg-hij")
     note = await service.store_notes(
         run.id,
@@ -147,6 +148,7 @@ async def test_store_notes_roundtrip() -> None:
         ),
     )
     assert note.bot_run_id == run.id
+    assert events.notes == [run.id]
     stored = await service.get_notes(run.id)
     assert stored.summary == "standup"
     assert stored.action_items == [{"text": "kirim", "owner": "Dina", "due": None}]

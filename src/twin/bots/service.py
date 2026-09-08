@@ -204,6 +204,8 @@ class BotService:
             created_at=self._clock(),
         )
         await self._repo.save_notes(note)
+        if self._events is not None:
+            await self._events.notes_completed(bot_id)
         return note
 
     async def get_notes(self, bot_id: str) -> MeetingNote:

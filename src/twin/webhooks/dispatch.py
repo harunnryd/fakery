@@ -44,6 +44,10 @@ def segment_payload(segment: TranscriptSegment) -> dict:
     }
 
 
+def notes_payload(bot_id: str) -> dict:
+    return {"type": "notes.completed", "bot_id": bot_id}
+
+
 class WebhookDispatcher:
     def __init__(
         self,
@@ -60,6 +64,9 @@ class WebhookDispatcher:
 
     async def transcript_segment(self, segment: TranscriptSegment) -> None:
         await self._fanout(segment_payload(segment))
+
+    async def notes_completed(self, bot_id: str) -> None:
+        await self._fanout(notes_payload(bot_id))
 
     async def _fanout(self, payload: dict) -> None:
         async with session_scope(self._session_factory) as session:
