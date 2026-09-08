@@ -32,6 +32,10 @@
   mid-meeting, batch fallback quiet when live delivers;
   `bot.status_changed` + `transcript.segment` webhooks HMAC-signed
   with retry (one transient failure auto-recovered live).
+- `[x]` M3 automatic notes (code live-verified in container, meeting
+  loop pending): LangChain structured notes after transcription,
+  `notes.completed` webhook, API-key auth, paginated bot listing,
+  notes endpoint, request tracing.
 
 ## Modules to build (dependency order)
 
@@ -99,10 +103,12 @@ The process that turns a queued bot run into an attended meeting.
 - `[x]` Batch fallback: post-meeting transcription from the recording
   when live streaming yields nothing.
 
-### 5. `notes/` — LLM summarizer
-- `[ ]` Implement `Summarizer`: transcript → `MeetingNotes`
-  (summary, key points, action items with owner/due).
-- `[ ]` Store `meeting_notes`; run after meeting end, inside the runner.
+### 5. `notes/` — LLM summarizer (shipped)
+- `[x]` Implement `Summarizer`: transcript → `MeetingNotes`
+  (summary, key points, action items with owner/due) via LangChain
+  structured output (OpenAI mini default, provider/model via env).
+- `[x]` Store `meeting_notes`; run after meeting end, inside the runner
+  (3 attempts, then completed without notes — attendance is the promise).
 
 ### 6. `personas/` — digital stand-in identity
 Stand-in mode shares the bot pipeline; the run's mode
@@ -151,22 +157,22 @@ never speaks autonomously — silence is the default state.
   double-join trap impossible by construction.
 - `[ ]` Retention rule: raw audio 30 days, then purge (M4 job).
 
-### 9. `webhooks/` — real delivery (M2: status + segments)
+### 9. `webhooks/` — real delivery (M2: status + segments, M3: notes)
 - `[x]` `webhook_subscriptions` table + API CRUD (URL per client).
 - `[x]` Emit `bot.status_changed` on every transition,
-  `transcript.segment` on new segments (`notes.completed` waits M3).
+  `transcript.segment` on new segments, `notes.completed` at the end.
 - `[x]` Delivery retry policy + failure logging.
 
-### 10. `api/` — complete the surface
-- `[ ]` API-key auth (`X-API-Key`, keys seeded via env/config).
-- `[ ]` `GET /v1/bots` (cursor pagination), `DELETE /v1/bots/{id}`,
+### 10. `api/` — complete the surface (auth, list, notes shipped)
+- `[x]` API-key auth (`X-API-Key`, keys seeded via env/config).
+- `[x]` `GET /v1/bots` (cursor pagination), `DELETE /v1/bots/{id}`,
   `GET /v1/bots/{id}/notes`.
 - `[ ]` Persona CRUD (`/v1/personas`) + brief submission
   (`/v1/personas/{id}/updates`); bot creation accepts `mode`
   (`assistant` | `stand_in`) and `persona_id`.
 - `[ ]` `POST /v1/bots/{id}/wake` — client-driven wake with an optional
   prompt; queues a speech turn.
-- `[ ]` `request_id` middleware; bind `bot_id` to all log lines.
+- `[x]` `request_id` middleware; bind `bot_id` to all log lines.
 
 ### 11. `deploy/` — ship the loop
 - `[x]` Dockerfile: one image for API and worker — Python 3.12 +
