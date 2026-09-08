@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     env: str = "dev"
     log_level: str = "INFO"
     tenant: str = "default"
+    api_key: str = ""
 
     database_url: str = "postgresql+asyncpg://twin:twin@localhost:5432/twin"
     redis_url: str = "redis://localhost:6379/0"

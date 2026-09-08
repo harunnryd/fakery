@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from twin.api.deps import get_bot_service, get_redis, get_subscription_service
 from twin.bots.models import BotRun, WebhookSubscription
 from twin.bots.service import BotService, SubscriptionService
+from twin.core.config import Settings
 from twin.main import create_app
 
 
@@ -144,3 +145,37 @@ def test_webhook_delete_unknown_returns_not_found_problem() -> None:
         response = client.delete("/v1/webhooks/wh_missing")
     assert response.status_code == 404
     assert response.json()["type"].endswith("/not-found")
+
+
+def _authed_client() -> TestClient:
+    service = BotService(FakeRepo())
+    app = create_app()
+    app.dependency_overrides[get_bot_service] = lambda: service
+    app.dependency_overrides[get_redis] = lambda: FakeRedis()
+    return TestClient(app)
+
+
+def test_api_key_guards_v1_routes() -> None:
+    with _authed_client() as client:
+        client.app.state.settings = Settings(api_key="secret")
+        denied = client.post(
+            "/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"}
+        )
+        assert denied.status_code == 401
+        assert denied.json()["type"].endswith("/unauthorized")
+        allowed = client.post(
+            "/v1/bots",
+            json={"meeting_url": "https://meet.google.com/abc-defg-hij"},
+            headers={"x-api-key": "secret"},
+        )
+        assert allowed.status_code == 202
+        assert client.get("/healthz").status_code == 200
+
+
+def test_request_id_header_present() -> None:
+    service = BotService(FakeRepo())
+    with _client_with(service) as client:
+        response = client.get("/healthz", headers={"x-request-id": "req_9"})
+        assert response.headers["x-request-id"] == "req_9"
+        generated = client.get("/healthz")
+        assert generated.headers["x-request-id"].startswith("req_")

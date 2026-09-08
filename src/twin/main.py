@@ -1,9 +1,11 @@
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from redis.asyncio import from_url
 
 from twin.api.routes import router
@@ -29,6 +31,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(title="Fakery API", version="0.1.0", lifespan=lifespan)
     app.include_router(router)
+
+    @app.middleware("http")
+    async def request_id_middleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        request_id = request.headers.get("x-request-id") or f"req_{uuid.uuid4().hex[:12]}"
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        try:
+            response = await call_next(request)
+        finally:
+            structlog.contextvars.clear_contextvars()
+        response.headers["x-request-id"] = request_id
+        return response
 
     @app.exception_handler(TwinError)
     async def twin_error_handler(request: Request, exc: TwinError) -> JSONResponse:
