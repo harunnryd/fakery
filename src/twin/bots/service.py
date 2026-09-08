@@ -4,7 +4,7 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from twin.bots.models import BotRun, MeetingNote, TranscriptSegment, WebhookSubscription
@@ -24,6 +24,8 @@ class BotRepository(Protocol):
     async def segments(self, bot_id: str) -> list[TranscriptSegment]: ...
 
     async def add_segment(self, segment: TranscriptSegment) -> None: ...
+
+    async def list_runs(self, limit: int, cursor: str | None) -> list[BotRun]: ...
 
     async def annotate_speakers(
         self, bot_id: str, start_ms: int, end_ms: int, speaker: str
@@ -63,6 +65,17 @@ class SqlalchemyBotRepository:
 
     async def get_notes(self, bot_id: str) -> MeetingNote | None:
         return await self._session.get(MeetingNote, bot_id)
+
+    async def list_runs(self, limit: int, cursor: str | None) -> list[BotRun]:
+        stmt = select(BotRun).order_by(BotRun.created_at.desc(), BotRun.id.desc()).limit(limit)
+        if cursor is not None:
+            anchor = await self._session.get(BotRun, cursor)
+            if anchor is not None:
+                stmt = stmt.where(
+                    tuple_(BotRun.created_at, BotRun.id) < (anchor.created_at, anchor.id)
+                )
+        rows = await self._session.execute(stmt)
+        return list(rows.scalars())
 
     async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
         rows = await self._session.execute(
@@ -213,6 +226,12 @@ class BotService:
         if note is None:
             raise make_error("not-found", detail=f"notes for {bot_id} do not exist")
         return note
+
+    async def list_runs(self, limit: int, cursor: str | None) -> tuple[list[BotRun], str | None]:
+        rows = await self._repo.list_runs(limit + 1, cursor)
+        if len(rows) <= limit:
+            return rows, None
+        return rows[:limit], rows[limit - 1].id
 
     async def advance(self, bot_id: str, target: BotStatus) -> BotRun:
         run = await self.get(bot_id)

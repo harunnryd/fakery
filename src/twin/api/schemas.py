@@ -38,6 +38,11 @@ class TranscriptResponse(BaseModel):
     segments: list[TranscriptSegmentResource]
 
 
+class BotListResponse(BaseModel):
+    bots: list[BotResource]
+    next_cursor: str | None = None
+
+
 class CreateWebhookRequest(BaseModel):
     url: HttpUrl
 

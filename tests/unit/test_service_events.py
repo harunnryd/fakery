@@ -49,6 +49,15 @@ class FakeRepo:
     async def get_notes(self, bot_id: str) -> MeetingNote | None:
         return self.notes.get(bot_id)
 
+    async def list_runs(self, limit: int, cursor: str | None) -> list[BotRun]:
+        ordered = sorted(self.runs.values(), key=lambda run: (run.created_at, run.id), reverse=True)
+        if cursor is not None and cursor in self.runs:
+            anchor = self.runs[cursor]
+            ordered = [
+                run for run in ordered if (run.created_at, run.id) < (anchor.created_at, anchor.id)
+            ]
+        return ordered[:limit]
+
     async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
         count = 0
         for segment in self.saved:
@@ -133,6 +142,18 @@ async def test_annotate_skips_speakerless_batch() -> None:
         run.id, [Segment(text="x", start_ms=0, end_ms=3000, speaker=None)]
     )
     assert annotated == 0
+
+
+async def test_list_runs_paginates_newest_first() -> None:
+    service, _ = _service(None)
+    ids = [(await service.create("https://meet.google.com/abc-defg-hij")).id for _ in range(3)]
+    newest = sorted(ids, reverse=True)
+    page, cursor = await service.list_runs(2, None)
+    assert [run.id for run in page] == newest[:2]
+    assert cursor == page[-1].id
+    rest, end = await service.list_runs(2, cursor)
+    assert [run.id for run in rest] == newest[2:]
+    assert end is None
 
 
 async def test_store_notes_roundtrip() -> None:

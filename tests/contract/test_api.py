@@ -26,6 +26,15 @@ class FakeRepo:
     async def add_segment(self, segment) -> None:
         self._segments.setdefault(segment.bot_run_id, []).append(segment)
 
+    async def list_runs(self, limit: int, cursor: str | None) -> list[BotRun]:
+        ordered = sorted(self.runs.values(), key=lambda run: (run.created_at, run.id), reverse=True)
+        if cursor is not None and cursor in self.runs:
+            anchor = self.runs[cursor]
+            ordered = [
+                run for run in ordered if (run.created_at, run.id) < (anchor.created_at, anchor.id)
+            ]
+        return ordered[:limit]
+
     async def annotate_speakers(self, bot_id: str, start_ms: int, end_ms: int, speaker: str) -> int:
         return 0
 
@@ -179,3 +188,16 @@ def test_request_id_header_present() -> None:
         assert response.headers["x-request-id"] == "req_9"
         generated = client.get("/healthz")
         assert generated.headers["x-request-id"].startswith("req_")
+
+
+def test_list_bots_paginates_by_cursor() -> None:
+    service = BotService(FakeRepo())
+    with _client_with(service) as client:
+        for _ in range(3):
+            client.post("/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"})
+        first = client.get("/v1/bots?limit=2").json()
+        assert len(first["bots"]) == 2
+        assert first["next_cursor"] == first["bots"][1]["id"]
+        second = client.get(f"/v1/bots?limit=2&cursor={first['next_cursor']}").json()
+        assert len(second["bots"]) == 1
+        assert second["next_cursor"] is None

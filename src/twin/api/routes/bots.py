@@ -1,7 +1,8 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from twin.api.deps import BotIdDep, BotServiceDep, RedisDep
 from twin.api.schemas import (
+    BotListResponse,
     BotResource,
     CreateBotRequest,
     TranscriptResponse,
@@ -20,6 +21,19 @@ async def create_bot(
     run = await service.create(meeting_url=str(body.meeting_url), display_name=body.display_name)
     await enqueue_run(redis, run.id)
     return BotResource.model_validate(run)
+
+
+@router.get("/bots")
+async def list_bots(
+    service: BotServiceDep,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+) -> BotListResponse:
+    runs, next_cursor = await service.list_runs(limit, cursor)
+    return BotListResponse(
+        bots=[BotResource.model_validate(run) for run in runs],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get("/bots/{bot_id}")
