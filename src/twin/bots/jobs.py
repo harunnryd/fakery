@@ -16,7 +16,8 @@ JOB_SECRET_NAME = "twin-secrets"
 JOB_MEMORY_REQUEST = "2Gi"
 JOB_MEMORY_LIMIT = "3Gi"
 JOB_CPU_REQUEST = "500m"
-JOB_XVFB_COMMAND = ["xvfb-run", "-a", "python", "-m", "twin.bot_run"]
+JOB_CPU_LIMIT = "2"
+JOB_XVFB_COMMAND = ["dumb-init", "--", "xvfb-run", "-a", "python", "-m", "twin.bot_run"]
 
 
 def bot_job_name(bot_id: str) -> str:
@@ -56,7 +57,7 @@ def build_bot_job(bot_id: str, image: str, namespace: str, meeting_max_minutes: 
                                     "memory": JOB_MEMORY_REQUEST,
                                     "cpu": JOB_CPU_REQUEST,
                                 },
-                                "limits": {"memory": JOB_MEMORY_LIMIT},
+                                "limits": {"memory": JOB_MEMORY_LIMIT, "cpu": JOB_CPU_LIMIT},
                             },
                         }
                     ],
@@ -76,6 +77,8 @@ def resolve_job_outcome(job_result: str, db_terminal: bool) -> str | None:
 
 class JobClient(Protocol):
     async def create_job(self, manifest: dict[str, Any]) -> None: ...
+
+    async def get_job(self, name: str) -> Any | None: ...
 
     async def wait_terminal(self, name: str, timeout_s: int) -> str: ...
 
@@ -112,6 +115,17 @@ class K8sJobClient:
         api = await self._batch()
         await api.create_namespaced_job(self._namespace, manifest)
 
+    async def get_job(self, name: str) -> Any | None:
+        from kubernetes_asyncio.client import ApiException
+
+        api = await self._batch()
+        try:
+            return await api.read_namespaced_job(name, self._namespace)
+        except ApiException as err:
+            if err.status == 404:
+                return None
+            raise
+
     async def wait_terminal(self, name: str, timeout_s: int) -> str:
         from kubernetes_asyncio.client import ApiException
 
@@ -122,7 +136,7 @@ class K8sJobClient:
                 job = await api.read_namespaced_job_status(name, self._namespace)
             except ApiException as err:
                 if err.status == 404:
-                    return "failed"
+                    return "missing"
                 raise
             if getattr(job.status, "succeeded", 0):
                 return "completed"

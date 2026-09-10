@@ -1,6 +1,7 @@
 import asyncio
 import base64
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from tempfile import SpooledTemporaryFile
 from typing import Any
 
 import structlog
@@ -8,6 +9,8 @@ import structlog
 POLL_INTERVAL_S = 2
 AUDIO_PROBE_EVERY_DRAINS = 15
 RECORDER_TIMESLICE_MS = 2_000
+CHECKPOINT_CHUNKS = 5
+SPOOL_MEMORY_LIMIT = 1_048_576
 ANCHOR_ID = "__fakery-rec"
 
 logger = structlog.get_logger(__name__)
@@ -50,9 +53,24 @@ _HOOK_TEMPLATE = """
     window.__fakeryTrackCount = 0;
     window.__fakeryRecorder = null;
     window.__fakeryAudioStream = null;
-    const audioAlive = () => {
-      const stream = window.__fakeryAudioStream;
-      return stream && stream.getAudioTracks().some((t) => t.readyState === 'live');
+    window.__fakeryAudioTracks = new Map();
+    window.__fakeryAudioSources = new Map();
+    window.__fakeryAudioContext = null;
+    window.__fakeryAudioDestination = null;
+    const liveTracks = () => [...window.__fakeryAudioTracks.values()]
+      .filter((t) => t.readyState === 'live');
+    const audioAlive = () => liveTracks().length > 0;
+    const ensureMixer = () => {
+      if (window.__fakeryAudioDestination) return window.__fakeryAudioDestination;
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) throw new Error('no-audio-context');
+      const context = new AudioContextCtor();
+      const destination = context.createMediaStreamDestination();
+      window.__fakeryAudioContext = context;
+      window.__fakeryAudioDestination = destination;
+      window.__fakeryAudioStream = destination.stream;
+      context.resume().catch(() => {});
+      return destination;
     };
     function HookedRTC(...args) {
       window.__fakeryPcCount += 1;
@@ -67,18 +85,27 @@ _HOOK_TEMPLATE = """
           window.__fakeryTrackReady = track.readyState;
           report();
           if (track.kind !== 'audio') return;
-          if (window.__fakeryRecorder && audioAlive()) return;
-          try {
-            if (window.__fakeryRecorder) window.__fakeryRecorder.stop();
-          } catch (err) {}
-          const stream = new MediaStream([track]);
-          window.__fakeryAudioStream = stream;
+          window.__fakeryAudioTracks.set(track.id, track);
           window.__fakeryAudioTrack = track;
+          const destination = ensureMixer();
+          const previousSource = window.__fakeryAudioSources.get(track.id);
+          if (previousSource) {
+            try { previousSource.disconnect(); } catch (err) {}
+          }
+          const source = window.__fakeryAudioContext.createMediaStreamSource(
+            new MediaStream([track]),
+          );
+          source.connect(destination);
+          window.__fakeryAudioSources.set(track.id, source);
+          if (window.__fakeryRecorder && window.__fakeryRecorder.state === 'recording') {
+            report();
+            return;
+          }
           const mime = pickMime();
           window.__fakeryMime = mime || 'default';
           const recorder = mime
-            ? new MediaRecorder(stream, {mimeType: mime})
-            : new MediaRecorder(stream);
+            ? new MediaRecorder(destination.stream, {mimeType: mime})
+            : new MediaRecorder(destination.stream);
           window.__fakeryRecorder = recorder;
           window.__fakeryRecState = 'recording';
           report();
@@ -90,6 +117,18 @@ _HOOK_TEMPLATE = """
             window.__fakeryRecState = 'stopped';
             report();
           };
+          track.addEventListener('ended', () => {
+            window.__fakeryAudioTracks.delete(track.id);
+            const source = window.__fakeryAudioSources.get(track.id);
+            if (source) {
+              try { source.disconnect(); } catch (err) {}
+              window.__fakeryAudioSources.delete(track.id);
+            }
+            if (!audioAlive() && window.__fakeryRecorder) {
+              try { window.__fakeryRecorder.stop(); } catch (err) {}
+            }
+            report();
+          });
           recorder.ondataavailable = async (e) => {
             try {
               if (e.data.size === 0) return;
@@ -168,6 +207,22 @@ _READ_AUDIO_TRACK = """
 }
 """
 
+_STOP_RECORDER = """
+async () => {
+  const recorder = window.__fakeryRecorder;
+  if (!recorder || recorder.state === 'inactive') return false;
+  await new Promise((resolve) => {
+    const previous = recorder.onstop;
+    recorder.onstop = (event) => {
+      if (previous) previous(event);
+      resolve(true);
+    };
+    try { recorder.stop(); } catch (err) { resolve(false); }
+  });
+  return true;
+}
+"""
+
 
 async def arm_via_cdp_eval(page: Any) -> bool:
     try:
@@ -175,13 +230,11 @@ async def arm_via_cdp_eval(page: Any) -> bool:
         await session.send("Runtime.evaluate", {"expression": RECORDER_HOOK})
         return True
     except Exception as err:
-        logger.warning("recorder.cdp_arm_failed", error=str(err))
+        logger.warning("recorder.cdp_arm_failed", error=type(err).__name__)
         return False
 
 
 async def diagnostics(page: Any) -> dict:
-    # Meet may build its RTCPeerConnection in any frame — telemetry is read
-    # per frame so the realm (main vs iframe) is visible in the logs.
     results: dict = {}
     for frame in page.frames:
         try:
@@ -201,10 +254,21 @@ async def audio_track_state(page: Any) -> dict:
 
 
 class MeetingRecorder:
-    def __init__(self, page: Any, sink: Callable[[bytes], None] | None = None) -> None:
+    def __init__(
+        self,
+        page: Any,
+        sink: Callable[[bytes], None] | None = None,
+        checkpoint_sink: Callable[[int, bytes], Awaitable[None]] | None = None,
+    ) -> None:
         self._page = page
         self._sink = sink
-        self._buffer = bytearray()
+        self._checkpoint_sink = checkpoint_sink
+        self._checkpoint_buffer = bytearray()
+        self._checkpoint_sequence = 0
+        self._checkpoint_chunks = 0
+        self.checkpoint_failed = False
+        self._spool = SpooledTemporaryFile(max_size=SPOOL_MEMORY_LIMIT)
+        self._size = 0
         self._task: asyncio.Task | None = None
         self._drains = 0
 
@@ -212,6 +276,11 @@ class MeetingRecorder:
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> bytes:
+        try:
+            await asyncio.wait_for(self._page.evaluate(_STOP_RECORDER), timeout=5)
+            await asyncio.sleep(0.25)
+        except Exception:
+            pass
         if self._task is not None:
             self._task.cancel()
             try:
@@ -219,12 +288,14 @@ class MeetingRecorder:
             except asyncio.CancelledError:
                 pass
         await self._drain()
+        await self._flush_checkpoint()
+        self._spool.seek(0)
+        recording = self._spool.read()
+        self._spool.close()
         diag = await diagnostics(self._page)
         audio = await audio_track_state(self._page)
-        logger.info(
-            "recorder.stopped", recording_bytes=len(self._buffer), audio_track=audio, **diag
-        )
-        return bytes(self._buffer)
+        logger.info("recorder.stopped", recording_bytes=self._size, audio_track=audio, **diag)
+        return recording
 
     async def _poll_loop(self) -> None:
         while True:
@@ -242,6 +313,24 @@ class MeetingRecorder:
             return
         for chunk in chunks or []:
             data = base64.b64decode(chunk)
-            self._buffer += data
+            self._spool.write(data)
+            self._size += len(data)
+            self._checkpoint_buffer.extend(data)
+            self._checkpoint_chunks += 1
             if self._sink is not None:
                 self._sink(data)
+            if self._checkpoint_chunks >= CHECKPOINT_CHUNKS:
+                await self._flush_checkpoint()
+
+    async def _flush_checkpoint(self) -> None:
+        if self._checkpoint_sink is None or not self._checkpoint_buffer:
+            return
+        data = bytes(self._checkpoint_buffer)
+        self._checkpoint_buffer.clear()
+        self._checkpoint_chunks = 0
+        try:
+            await self._checkpoint_sink(self._checkpoint_sequence, data)
+        except Exception as err:
+            self.checkpoint_failed = True
+            logger.warning("recorder.checkpoint_failed", error=type(err).__name__)
+        self._checkpoint_sequence += 1

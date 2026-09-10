@@ -3,6 +3,11 @@ from typing import Any
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy import select
+
+from twin.bots.models import BotRun
+from twin.core.time import utcnow
+from twin.storage.database import session_scope
 
 STREAM = "bots:runs"
 GROUP = "workers"
@@ -12,6 +17,7 @@ CANCEL_KEY = "bots:cancel:{bot_id}"
 CANCEL_TTL_S = 3_600
 LEASE_TTL_S = 3_600
 HEARTBEAT_TTL_S = 90
+DISPATCH_RELAY_BATCH = 50
 
 
 async def request_cancel(redis: Redis, bot_id: str) -> None:
@@ -60,6 +66,30 @@ async def enqueue_run(redis: Redis, bot_id: str) -> None:
     await redis.xadd(STREAM, {"bot_id": bot_id})
 
 
+async def relay_queued(redis: Redis, session_factory: Any) -> int:
+    await ensure_group(redis)
+    relayed = 0
+    async with session_scope(session_factory) as session:
+        rows = await session.execute(
+            select(BotRun)
+            .where(BotRun.status == "queued", BotRun.dispatch_status == "pending")
+            .order_by(BotRun.created_at, BotRun.id)
+            .limit(DISPATCH_RELAY_BATCH)
+            .with_for_update(skip_locked=True)
+        )
+        for run in list(rows.scalars()):
+            run.dispatch_attempts += 1
+            try:
+                await redis.xadd(STREAM, {"bot_id": run.id})
+            except Exception as err:
+                run.dispatch_last_error = type(err).__name__
+                continue
+            run.dispatch_status = "enqueued"
+            run.dispatch_enqueued_at = utcnow()
+            relayed += 1
+    return relayed
+
+
 async def claim_run(
     redis: Redis, consumer: str, block_ms: int = CLAIM_BLOCK_MS
 ) -> tuple[str, str] | None:
@@ -86,7 +116,7 @@ async def reclaim_stale(redis: Redis, consumer: str) -> tuple[str, str] | None:
     )
     if not entries:
         return None
-    return _first_entry([("", entries)])  # type: ignore[list-item]
+    return _first_entry([("", entries)])
 
 
 async def ack_run(redis: Redis, entry_id: str) -> None:

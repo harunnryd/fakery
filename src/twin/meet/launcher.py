@@ -3,9 +3,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
-FAKE_MEDIA_ARGS = (
+MEDIA_ARGS = (
     "--use-fake-ui-for-media-stream",
-    "--use-fake-device-for-media-stream",
     "--autoplay-policy=no-user-gesture-required",
 )
 
@@ -31,6 +30,7 @@ class EngineConfig:
     timezone: str = "Asia/Jakarta"
     guest: bool = False
     init_scripts: tuple[str, ...] = field(default_factory=tuple)
+    fake_audio_path: Path | None = None
 
 
 def _stable_seed(stable_id: str) -> int:
@@ -43,15 +43,15 @@ def _clean_stale_locks(profile_dir: Path) -> None:
         (profile_dir / name).unlink(missing_ok=True)
 
 
-def _cloak_args(profile_dir: Path) -> list[str]:
+def _cloak_args(profile_dir: Path, fake_audio_path: Path | None = None) -> list[str]:
     seed = _stable_seed(str(profile_dir))
-    return [
+    args = [
         f"--fingerprint={seed}",
         f"--fingerprint-screen-width={CLOAK_WINDOW_WIDTH}",
         f"--fingerprint-screen-height={CLOAK_WINDOW_HEIGHT}",
         f"--window-size={CLOAK_WINDOW_WIDTH},{CLOAK_WINDOW_HEIGHT}",
         "--window-position=0,0",
-        *FAKE_MEDIA_ARGS,
+        *MEDIA_ARGS,
         "--disable-blink-features=AutomationControlled",
         "--disable-notifications",
         "--disable-extensions",
@@ -69,6 +69,14 @@ def _cloak_args(profile_dir: Path) -> list[str]:
         "--force-webrtc-ip-handling-policy=default",
         "--webrtc-ip-handling-policy=default",
     ]
+    if fake_audio_path is not None:
+        args.extend(
+            (
+                "--use-fake-device-for-media-stream",
+                f"--use-file-for-fake-audio-capture={fake_audio_path}",
+            )
+        )
+    return args
 
 
 class CloakBrowser:
@@ -90,7 +98,7 @@ class CloakBrowser:
             timezone=config.timezone,
             viewport=None,
             humanize=True,
-            args=_cloak_args(profile_dir),
+            args=_cloak_args(profile_dir, config.fake_audio_path),
         )
         for script in config.init_scripts:
             await self._context.add_init_script(script)

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from twin.bots.models import BotRun, MeetingNote, TranscriptSegment
-from twin.bots.service import BotService
+from twin.bots.service import BotService, RecordingArtifact
 from twin.bots.state import BotStatus
 from twin.notes.summarizer import ActionItem, MeetingNotes
 from twin.transcription.transcriber import Segment
@@ -37,11 +37,43 @@ class FakeRepo:
     async def get(self, bot_id: str) -> BotRun | None:
         return self.runs.get(bot_id)
 
+    async def get_for_update(self, bot_id: str) -> BotRun | None:
+        return self.runs.get(bot_id)
+
+    async def get_by_idempotency(self, idempotency_key: str) -> BotRun | None:
+        return next(
+            (run for run in self.runs.values() if run.idempotency_key == idempotency_key), None
+        )
+
+    async def find_active_meeting(self, meeting_key: str) -> BotRun | None:
+        return next(
+            (
+                run
+                for run in self.runs.values()
+                if run.meeting_key == meeting_key
+                and run.status in {"queued", "joining", "joined", "recording", "processing"}
+            ),
+            None,
+        )
+
     async def segments(self, bot_id: str) -> list:
         return [seg for seg in self.saved if seg.bot_run_id == bot_id]
 
     async def add_segment(self, segment: TranscriptSegment) -> None:
         self.saved.append(segment)
+
+    async def find_segment(self, bot_id: str, segment: Segment) -> TranscriptSegment | None:
+        return next(
+            (
+                stored
+                for stored in self.saved
+                if stored.bot_run_id == bot_id
+                and stored.start_ms == segment.start_ms
+                and stored.end_ms == segment.end_ms
+                and stored.text == segment.text
+            ),
+            None,
+        )
 
     async def save_notes(self, note: MeetingNote) -> None:
         self.notes[note.bot_run_id] = note
@@ -85,7 +117,7 @@ async def test_advance_emits_every_transition() -> None:
     run = await service.create("https://meet.google.com/abc-defg-hij")
     await service.advance(run.id, BotStatus.JOINING)
     await service.advance(run.id, BotStatus.FAILED)
-    assert events.statuses == [(run.id, "joining"), (run.id, "failed")]
+    assert events.statuses == [(run.id, "queued"), (run.id, "joining"), (run.id, "failed")]
 
 
 async def test_advance_silent_without_sink() -> None:
@@ -106,6 +138,17 @@ async def test_ingest_persists_and_emits_segment() -> None:
     assert [seg.text for seg in await service.transcript(run.id)] == ["setuju"]
     assert events.segments == [segment]
     assert repo.saved == [segment]
+
+
+async def test_ingest_deduplicates_replayed_segment() -> None:
+    events = FakeEvents()
+    service, _ = _service(events)
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    segment = Segment(text="setuju", start_ms=1000, end_ms=2000)
+    first = await service.ingest_segment(run.id, segment)
+    second = await service.ingest_segment(run.id, segment)
+    assert first.id == second.id
+    assert len(events.segments) == 1
 
 
 @pytest.mark.parametrize("speaker", ["Dina", None], ids=["named", "anonymous"])
@@ -146,7 +189,10 @@ async def test_annotate_skips_speakerless_batch() -> None:
 
 async def test_list_runs_paginates_newest_first() -> None:
     service, _ = _service(None)
-    ids = [(await service.create("https://meet.google.com/abc-defg-hij")).id for _ in range(3)]
+    ids = [
+        (await service.create(f"https://meet.google.com/{code}")).id
+        for code in ("abc-defg-hij", "def-ghij-klm", "ghi-jklm-nop")
+    ]
     newest = sorted(ids, reverse=True)
     page, cursor = await service.list_runs(2, None)
     assert [run.id for run in page] == newest[:2]
@@ -173,6 +219,34 @@ async def test_store_notes_roundtrip() -> None:
     stored = await service.get_notes(run.id)
     assert stored.summary == "standup"
     assert stored.action_items == [{"text": "kirim", "owner": "Dina", "due": None}]
+
+
+async def test_store_recording_roundtrip() -> None:
+    service, _ = _service()
+    run = await service.create("https://meet.google.com/abc-defg-hij")
+    expires_at = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+    await service.store_recording(
+        run.id,
+        RecordingArtifact(
+            uri="recordings/run.webm",
+            sha256="abc123",
+            size=42,
+            status="partial",
+            partial=True,
+            expires_at=expires_at,
+            checkpoint_manifest_uri="recordings/run/manifest.json",
+        ),
+    )
+
+    stored = await service.get(run.id)
+    assert stored.recording_uri == "recordings/run.webm"
+    assert stored.recording_sha256 == "abc123"
+    assert stored.recording_bytes == 42
+    assert stored.recording_status == "partial"
+    assert stored.recording_partial is True
+    assert stored.recording_expires_at == expires_at
+    assert stored.checkpoint_manifest_uri == "recordings/run/manifest.json"
 
 
 async def test_get_notes_missing_is_not_found() -> None:

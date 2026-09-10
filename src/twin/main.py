@@ -12,6 +12,7 @@ from twin.api.routes import router
 from twin.core.config import get_settings
 from twin.core.errors import TwinError, make_error
 from twin.core.logging import configure_logging
+from twin.storage.blob import MinioBlobStore
 from twin.storage.database import create_engine_and_sessionmaker
 
 
@@ -23,6 +24,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.session_factory = session_factory
     app.state.redis = from_url(settings.redis_url, decode_responses=True)
+    app.state.blob = MinioBlobStore(
+        settings.blob_endpoint,
+        settings.blob_access_key,
+        settings.blob_secret_key,
+        settings.blob_bucket,
+    )
     yield
     await app.state.redis.aclose()
     await engine.dispose()

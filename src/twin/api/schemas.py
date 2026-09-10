@@ -21,6 +21,20 @@ class BotResource(BaseModel):
     created_at: datetime
     joined_at: datetime | None
     left_at: datetime | None
+    stop_reason: str | None = None
+    recording_uri: str | None = None
+    recording_sha256: str | None = None
+    recording_status: str | None = None
+    recording_bytes: int | None = None
+    recording_duration_ms: int | None = None
+    recording_expires_at: datetime | None = None
+    recording_partial: bool | None = None
+    checkpoint_manifest_uri: str | None = None
+    finalization_status: str | None = None
+    transcription_status: str | None = None
+    transcription_error: str | None = None
+    notes_status: str | None = None
+    notes_error: str | None = None
 
 
 class TranscriptSegmentResource(BaseModel):
@@ -70,3 +84,19 @@ class WebhookResource(BaseModel):
     id: str
     url: str
     created_at: datetime
+
+
+class WebhookDeliveryResource(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    subscription_id: str | None
+    event_id: str
+    sequence: int
+    status: str
+    attempts: int
+    next_try_at: datetime
+    last_error: str | None
+    last_status_code: int | None
+    dead_at: datetime | None
+    sent_at: datetime | None

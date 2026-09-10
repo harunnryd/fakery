@@ -104,11 +104,16 @@ def test_build_bot_job_carries_run_identity(minutes: int, expected_deadline: int
     assert manifest["metadata"]["labels"]["twin.bot/id"] == "bot_abc123"
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "fakery:dev"
+    assert container["command"][:2] == ["dumb-init", "--"]
     assert container["command"][-2:] == ["twin.bot_run", "bot_abc123"]
     assert manifest["spec"]["backoffLimit"] == 0
     assert manifest["spec"]["ttlSecondsAfterFinished"] == 300
     assert manifest["spec"]["activeDeadlineSeconds"] == expected_deadline
     assert manifest["spec"]["template"]["spec"]["restartPolicy"] == "Never"
+    assert container["resources"] == {
+        "requests": {"memory": "2Gi", "cpu": "500m"},
+        "limits": {"memory": "3Gi", "cpu": "2"},
+    }
 
 
 @pytest.mark.parametrize(
@@ -120,6 +125,8 @@ def test_build_bot_job_carries_run_identity(minutes: int, expected_deadline: int
         ("failed", False, "job-failed"),
         ("timeout", True, None),
         ("timeout", False, "job-timeout"),
+        ("missing", True, None),
+        ("missing", False, "job-failed"),
     ],
     ids=[
         "clean-finish",
@@ -128,6 +135,8 @@ def test_build_bot_job_carries_run_identity(minutes: int, expected_deadline: int
         "infra-dead-mid-run",
         "timeout-after-finish",
         "timeout-mid-run",
+        "missing-after-finish",
+        "missing-mid-run",
     ],
 )
 def test_resolve_job_outcome(job_result: str, db_terminal: bool, expected: str | None) -> None:

@@ -22,11 +22,11 @@ def test_notes_prompt_numbers_speakers() -> None:
     assert "[00:05] (spk-?) halo" in prompt
 
 
-def test_notes_prompt_truncates_long_transcripts() -> None:
+def test_notes_prompt_keeps_long_transcripts_intact() -> None:
     segments = [_segment("kata " * 200, index * 1000) for index in range(500)]
     prompt = notes_prompt(segments)
-    assert prompt.endswith("…[truncated]")
-    assert len(prompt) < 101000
+    assert "…[truncated]" not in prompt
+    assert "kata kata" in prompt
 
 
 def test_to_notes_drops_blank_actions_and_owners() -> None:

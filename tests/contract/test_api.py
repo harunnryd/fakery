@@ -21,11 +21,42 @@ class FakeRepo:
     async def get(self, bot_id: str) -> BotRun | None:
         return self.runs.get(bot_id)
 
+    async def get_for_update(self, bot_id: str) -> BotRun | None:
+        return self.runs.get(bot_id)
+
+    async def get_by_idempotency(self, idempotency_key: str) -> BotRun | None:
+        return next(
+            (run for run in self.runs.values() if run.idempotency_key == idempotency_key), None
+        )
+
+    async def find_active_meeting(self, meeting_key: str) -> BotRun | None:
+        return next(
+            (
+                run
+                for run in self.runs.values()
+                if run.meeting_key == meeting_key
+                and run.status in {"queued", "joining", "joined", "recording", "processing"}
+            ),
+            None,
+        )
+
     async def segments(self, bot_id: str) -> list:
         return self._segments.get(bot_id, [])
 
     async def add_segment(self, segment) -> None:
         self._segments.setdefault(segment.bot_run_id, []).append(segment)
+
+    async def find_segment(self, bot_id: str, segment) -> object | None:
+        return next(
+            (
+                stored
+                for stored in self._segments.get(bot_id, [])
+                if stored.start_ms == segment.start_ms
+                and stored.end_ms == segment.end_ms
+                and stored.text == segment.text
+            ),
+            None,
+        )
 
     async def save_notes(self, note) -> None:
         self._notes[note.bot_run_id] = note
@@ -99,6 +130,48 @@ def test_create_bot_returns_queued_resource() -> None:
     assert body["joined_at"] is None
 
 
+def test_create_bot_rejects_active_duplicate_meeting() -> None:
+    with _client_with(BotService(FakeRepo())) as client:
+        client.post("/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"})
+        response = client.post(
+            "/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij/"}
+        )
+    assert response.status_code == 409
+
+
+def test_create_bot_replays_idempotency_key() -> None:
+    with _client_with(BotService(FakeRepo())) as client:
+        first = client.post(
+            "/v1/bots",
+            json={"meeting_url": "https://meet.google.com/abc-defg-hij"},
+            headers={"Idempotency-Key": "req-1"},
+        )
+        second = client.post(
+            "/v1/bots",
+            json={"meeting_url": "https://meet.google.com/abc-defg-hij"},
+            headers={"Idempotency-Key": "req-1"},
+        )
+    assert first.status_code == second.status_code == 202
+    assert first.json()["id"] == second.json()["id"]
+
+
+def test_create_bot_rejects_idempotency_mismatch_and_bad_host() -> None:
+    with _client_with(BotService(FakeRepo())) as client:
+        client.post(
+            "/v1/bots",
+            json={"meeting_url": "https://meet.google.com/abc-defg-hij"},
+            headers={"Idempotency-Key": "req-2"},
+        )
+        mismatch = client.post(
+            "/v1/bots",
+            json={"meeting_url": "https://meet.google.com/def-ghij-klm"},
+            headers={"Idempotency-Key": "req-2"},
+        )
+        bad_host = client.post("/v1/bots", json={"meeting_url": "https://example.com/abc-defg-hij"})
+    assert mismatch.status_code == 409
+    assert bad_host.status_code == 422
+
+
 def test_create_bot_without_url_fails_as_validation_problem() -> None:
     with _client_with(BotService(FakeRepo())) as client:
         response = client.post("/v1/bots", json={})
@@ -158,6 +231,12 @@ def test_webhook_rejects_bad_url_as_validation_problem() -> None:
     assert response.json()["type"].endswith("/validation-failed")
 
 
+def test_webhook_rejects_internal_https_url() -> None:
+    with _webhook_client() as client:
+        response = client.post("/v1/webhooks", json={"url": "https://127.0.0.1/hook"})
+    assert response.status_code == 422
+
+
 def test_webhook_delete_unknown_returns_not_found_problem() -> None:
     with _webhook_client() as client:
         response = client.delete("/v1/webhooks/wh_missing")
@@ -190,6 +269,15 @@ def test_api_key_guards_v1_routes() -> None:
         assert client.get("/healthz").status_code == 200
 
 
+def test_pilot_environment_requires_api_key() -> None:
+    with _authed_client() as client:
+        client.app.state.settings = Settings(env="pilot", api_key="")
+        response = client.post(
+            "/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"}
+        )
+    assert response.status_code == 401
+
+
 def test_request_id_header_present() -> None:
     service = BotService(FakeRepo())
     with _client_with(service) as client:
@@ -202,8 +290,8 @@ def test_request_id_header_present() -> None:
 def test_list_bots_paginates_by_cursor() -> None:
     service = BotService(FakeRepo())
     with _client_with(service) as client:
-        for _ in range(3):
-            client.post("/v1/bots", json={"meeting_url": "https://meet.google.com/abc-defg-hij"})
+        for code in ("abc-defg-hij", "def-ghij-klm", "ghi-jklm-nop"):
+            client.post("/v1/bots", json={"meeting_url": f"https://meet.google.com/{code}"})
         first = client.get("/v1/bots?limit=2").json()
         assert len(first["bots"]) == 2
         assert first["next_cursor"] == first["bots"][1]["id"]

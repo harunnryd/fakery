@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     bot_runtime: str = "process"
     bot_image: str = "fakery:dev"
     pod_namespace: str = "fakery"
-    bot_locale: str = "id-ID"
+    bot_locale: str = "en-US"
     bot_timezone: str = "Asia/Jakarta"
     meeting_max_minutes: int = 45
     record_audio: bool = True

@@ -21,4 +21,14 @@ async def session_scope(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[AsyncSession]:
     async with session_factory() as session:
-        yield session
+        try:
+            yield session
+        except Exception:
+            rollback = getattr(session, "rollback", None)
+            if rollback is not None:
+                await rollback()
+            raise
+        else:
+            commit = getattr(session, "commit", None)
+            if commit is not None:
+                await commit()

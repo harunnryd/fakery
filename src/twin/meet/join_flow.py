@@ -22,6 +22,23 @@ END_CANCELLED = "cancelled"
 DEFAULT_LANG = "en"
 WARMUP_URLS = ("https://www.google.com/", "https://meet.google.com/")
 WARMUP_DWELL_S = (1.5, 3.0)
+WAITING_MARKERS = ("waiting", "menunggu")
+WAITING_PHRASES = (
+    "asking to be let in",
+    "let you in",
+    "lets you in",
+    "wait until a meeting host",
+)
+ADMISSION_MARKERS = (
+    "approval",
+    "admitted",
+    "permission",
+    "request",
+    "join",
+    "izin",
+    "bergabung",
+    "permintaan",
+)
 
 VOCABULARY = {
     "id": {
@@ -29,6 +46,13 @@ VOCABULARY = {
         "tooltip": ("Mengerti",),
         "dismiss": ("Jangan sekarang",),
         "gate": ("tidak dapat bergabung", "tidak bisa bergabung"),
+        "waiting": (
+            "menunggu seseorang",
+            "permintaan untuk bergabung",
+            "minta bergabung",
+            "menunggu diizinkan",
+            "menunggu untuk bergabung",
+        ),
         "leave": ("tutup panggilan", "tinggalkan", "keluar", "akhiri"),
         "end": ("telah berakhir", "menakhiri", "kamu dikeluarkan"),
     },
@@ -37,6 +61,14 @@ VOCABULARY = {
         "tooltip": ("Got it",),
         "dismiss": ("Not now",),
         "gate": ("can't join",),
+        "waiting": (
+            "waiting for someone",
+            "asking to join",
+            "request to join",
+            "waiting to be admitted",
+            "waiting for approval",
+            "waiting for permission",
+        ),
         "leave": ("leave", "end call"),
         "end": ("meeting ended", "you were removed", "call ended"),
     },
@@ -56,9 +88,14 @@ async def join_meeting(
     guest: bool = True,
     warmup: bool = False,
     pre_knock: Any | None = None,
+    should_stop: Any | None = None,
 ) -> None:
+    if should_stop is not None and await should_stop():
+        raise JoinError(END_CANCELLED, "join cancelled before warmup")
     if warmup:
         await _warmup_navigation(page)
+    if should_stop is not None and await should_stop():
+        raise JoinError(END_CANCELLED, "join cancelled before prejoin")
     await _open_prejoin(page, meeting_url, guest)
     if guest:
         await _fill_name(page, display_name)
@@ -66,14 +103,20 @@ async def join_meeting(
         await _settle_signed_in(page)
     if pre_knock is not None:
         await pre_knock(page)
+    if should_stop is not None and await should_stop():
+        raise JoinError(END_CANCELLED, "join cancelled before knock")
     await _knock(page)
 
 
-async def wait_admitted(page: Any, timeout_s: int = ADMISSION_TIMEOUT_S) -> str:
+async def wait_admitted(
+    page: Any, timeout_s: int = ADMISSION_TIMEOUT_S, should_stop: Any | None = None
+) -> str:
     deadline = asyncio.get_event_loop().time() + timeout_s
     probed = False
     while asyncio.get_event_loop().time() < deadline:
-        if await _leave_button(page) is not None:
+        if should_stop is not None and await should_stop():
+            return END_CANCELLED
+        if await _leave_button(page) is not None and not await _waiting_visible(page):
             return "admitted"
         gate = await _gate_visible(page)
         if gate:
@@ -129,7 +172,7 @@ async def log_participant_signals(page: Any) -> None:
         lang = await page.evaluate("() => document.documentElement.lang || ''")
         logger.info("probe.participants", lang=lang, signals=signals)
     except Exception as err:
-        logger.warning("probe.participants_failed", error=str(err))
+        logger.warning("probe.participants_failed", error=type(err).__name__)
 
 
 PARTICIPANT_PROBE_SELECTOR = (
@@ -207,6 +250,22 @@ async def _gate_visible(page: Any) -> str:
         if await _text_visible(page, gate):
             return gate
     return ""
+
+
+async def _waiting_visible(page: Any) -> bool:
+    vocabulary = await _vocabulary(page)
+    for text in vocabulary["waiting"]:
+        if await _text_visible(page, text):
+            return True
+    try:
+        body = (await page.locator("body").inner_text()).casefold()
+    except Exception:
+        return False
+    if any(phrase in body for phrase in WAITING_PHRASES):
+        return True
+    return any(marker in body for marker in WAITING_MARKERS) and any(
+        marker in body for marker in ADMISSION_MARKERS
+    )
 
 
 async def _log_button_labels(page: Any) -> None:

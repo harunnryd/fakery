@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 
 PCM_SAMPLE_RATE = 16000
 PCM_CHUNK_BYTES = 8192
+DECODER_STOP_TIMEOUT_S = 5
 
 
 def ffmpeg_argv() -> list[str]:
@@ -39,9 +40,22 @@ async def decode_webm(chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
             if not data:
                 break
             yield data
-    finally:
         await feed
-        await proc.wait()
+        if await proc.wait() != 0:
+            raise RuntimeError("audio_decode_failed")
+    finally:
+        feed.cancel()
+        await asyncio.gather(feed, return_exceptions=True)
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), DECODER_STOP_TIMEOUT_S)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
 
 
 async def _feed(proc: asyncio.subprocess.Process, chunks: AsyncIterator[bytes]) -> None:

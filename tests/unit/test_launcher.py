@@ -42,10 +42,17 @@ def test_stable_seed_repeats_for_same_identity() -> None:
 
 def test_cloak_args_carry_meet_media_and_webrtc_flags(tmp_path: Path) -> None:
     args = _cloak_args(tmp_path / "profile")
-    assert "--use-fake-device-for-media-stream" in args
+    assert "--use-fake-ui-for-media-stream" in args
+    assert "--use-fake-device-for-media-stream" not in args
     assert "--force-webrtc-ip-handling-policy=default" in args
     assert "--webrtc-ip-handling-policy=default" in args
     assert f"--window-size={CLOAK_WINDOW_WIDTH},{CLOAK_WINDOW_HEIGHT}" in args
+
+
+def test_cloak_args_add_fake_audio_only_for_explicit_fixture(tmp_path: Path) -> None:
+    args = _cloak_args(tmp_path / "profile", tmp_path / "fixture.wav")
+    assert "--use-fake-device-for-media-stream" in args
+    assert f"--use-file-for-fake-audio-capture={tmp_path / 'fixture.wav'}" in args
 
 
 class FakePage:
