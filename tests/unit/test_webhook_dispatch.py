@@ -38,9 +38,7 @@ class FakeSession:
 
     async def execute(self, stmt: object) -> FakeRows:
         text = str(stmt)
-        if "next_try_at <=" in text:
-            return FakeRows(self._rows)
-        if "webhook_deliveries" in text:
+        if "created_at <" in text:
             return FakeRows(self._aged)
         return FakeRows(self._rows)
 
@@ -168,7 +166,7 @@ async def test_outbox_silent_without_subscribers() -> None:
 
 @pytest.mark.parametrize(
     ("failures", "attempts", "expected"),
-    [(0, 0, "sent"), (9, 0, "failed"), (9, 4, "dead")],
+    [(0, 0, "sent"), (9, 0, "failed"), (20, 9, "dead")],
     ids=["first-try", "backs-off", "dead-letters"],
 )
 async def test_sender_attempt_outcomes(failures: int, attempts: int, expected: str) -> None:
@@ -183,8 +181,12 @@ async def test_sender_attempt_outcomes(failures: int, attempts: int, expected: s
     if expected == "failed":
         assert item.next_try_at > datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
         assert item.id not in FakeSession.deleted
+    elif expected == "dead":
+        assert item.status == "dead"
+        assert item.id not in FakeSession.deleted
     else:
-        assert item.id in FakeSession.deleted
+        assert item.status == "sent"
+        assert item.id not in FakeSession.deleted
 
 
 async def test_sender_signs_body() -> None:
@@ -228,3 +230,33 @@ async def test_sender_purges_old_rows() -> None:
     summary = await sender.run_once(FakeRedis())
     assert summary["purged"] == 1
     assert old.id in FakeSession.deleted
+
+
+async def test_sender_holds_later_sequence_until_first_succeeds() -> None:
+    transport = FlakyTransport(failures=1)
+    client = httpx.AsyncClient(transport=transport)
+    first = _delivery(key="whd_1")
+    second = _delivery(key="whd_2")
+    first.subscription_id = second.subscription_id = "sub_1"
+    first.sequence = 1
+    second.sequence = 2
+    first.status = second.status = "pending"
+    FakeSession.store = {first.id: first, second.id: second}
+    sender = WebhookSender(FakeSessionFactory([first, second]), "secret", client)
+    summary = await sender.run_once(FakeRedis())
+    assert len(transport.calls) == 1
+    assert summary["failed"] == 1
+    assert second.status == "pending"
+
+
+async def test_sender_keeps_dead_event_for_replay() -> None:
+    transport = FlakyTransport(failures=20)
+    client = httpx.AsyncClient(transport=transport)
+    item = _delivery(attempts=9)
+    item.status = "retry"
+    FakeSession.store = {item.id: item}
+    sender = WebhookSender(FakeSessionFactory([item]), "secret", client)
+    summary = await sender.run_once(FakeRedis())
+    assert summary["dead"] == 1
+    assert item.status == "dead"
+    assert item.id in FakeSession.store

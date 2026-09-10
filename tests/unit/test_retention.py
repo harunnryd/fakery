@@ -38,8 +38,8 @@ class FakeBlob:
 
 @pytest.mark.parametrize(
     ("age_days", "expected"),
-    [(31, True), (30, False), (0, False)],
-    ids=["expired", "boundary-kept", "fresh"],
+    [(31, True), (30, True), (0, False)],
+    ids=["expired", "boundary-expired", "fresh"],
 )
 def test_expired(age_days: int, expected: bool) -> None:
     now = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
@@ -51,18 +51,33 @@ async def test_sweep_deletes_only_expired() -> None:
     blob = FakeBlob([_object("a", 40, 10), _object("b", 5, 20), _object("c", 90, 30)])
     summary = await sweep(blob, RECORDINGS_PREFIX, 30, dry_run=False)
     assert blob.removed == ["a", "c"]
-    assert summary == {"scanned": 3, "deleted": 2, "kept": 1, "freed_bytes": 40}
+    assert summary == {
+        "scanned": 3,
+        "deleted": 2,
+        "would_delete": 0,
+        "kept": 1,
+        "failed": 0,
+        "freed_bytes": 40,
+    }
 
 
 async def test_sweep_dry_run_deletes_nothing() -> None:
     blob = FakeBlob([_object("a", 40, 10)])
     summary = await sweep(blob, RECORDINGS_PREFIX, 30, dry_run=True)
     assert blob.removed == []
-    assert summary["deleted"] == 1
+    assert summary["deleted"] == 0
+    assert summary["would_delete"] == 1
 
 
 async def test_sweep_tolerates_delete_failure() -> None:
     blob = FakeBlob([_object("a", 40, 10)], fail_on="a")
     summary = await sweep(blob, RECORDINGS_PREFIX, 30, dry_run=False)
     assert blob.removed == []
-    assert summary == {"scanned": 1, "deleted": 0, "kept": 0, "freed_bytes": 0}
+    assert summary == {
+        "scanned": 1,
+        "deleted": 0,
+        "would_delete": 0,
+        "kept": 0,
+        "failed": 1,
+        "freed_bytes": 0,
+    }
