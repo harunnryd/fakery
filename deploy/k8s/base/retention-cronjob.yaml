@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/name: retention
     app.kubernetes.io/component: retention
 spec:
-  schedule: "0 2 * * 0"
+  schedule: "0 2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -24,7 +24,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: retention
-              image: fakery:dev
+              image: fakery@sha256:42ee45b1c153268beb601690d95179f3b315d997c21bb46555fbe56d28be4988
               imagePullPolicy: IfNotPresent
               command: ["python", "-m", "twin.retention"]
               envFrom:

@@ -21,7 +21,7 @@ ENV PYTHONUNBUFFERED=1 \
 # system deps for the CloakBrowser patched Chromium binary; ffmpeg:
 # worker-side decode of Opus/webm meeting chunks to PCM for STT.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        xvfb dumb-init ca-certificates fonts-liberation fonts-noto-color-emoji \
+        xvfb xauth dumb-init ca-certificates fonts-liberation fonts-noto-color-emoji \
         ffmpeg \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
         libdbus-1-3 libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 \

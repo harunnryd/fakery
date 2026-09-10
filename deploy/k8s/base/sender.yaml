@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sender
+  namespace: fakery
+  labels:
+    app.kubernetes.io/name: sender
+    app.kubernetes.io/component: webhook-sender
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sender
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sender
+        app.kubernetes.io/component: webhook-sender
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: sender
+          image: fakery@sha256:42ee45b1c153268beb601690d95179f3b315d997c21bb46555fbe56d28be4988
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "twin.sender"]
+          envFrom:
+            - secretRef: {name: twin-secrets}
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

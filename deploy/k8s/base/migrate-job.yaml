@@ -1,4 +1,4 @@
-# Run once per schema change (after building the fakery:dev image):
+# Run once per schema change (after building and loading the release digest):
 #   just k8s-migrate
 apiVersion: batch/v1
 kind: Job
@@ -19,7 +19,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: migrate
-          image: fakery:dev
+          image: fakery@sha256:42ee45b1c153268beb601690d95179f3b315d997c21bb46555fbe56d28be4988
           imagePullPolicy: IfNotPresent
           command: ["alembic", "upgrade", "head"]
           envFrom:

@@ -22,21 +22,21 @@ spec:
       terminationGracePeriodSeconds: 120
       containers:
         - name: worker
-          image: fakery:dev
+          image: fakery@sha256:42ee45b1c153268beb601690d95179f3b315d997c21bb46555fbe56d28be4988
           imagePullPolicy: IfNotPresent
           # Headed Chromium under a virtual framebuffer — the humanization
           # layer needs a real rendering path, not bare headless.
-          # xvfb-run forwards SIGTERM so shutdown stays graceful.
-          command: ["xvfb-run", "-a", "python", "-m", "twin.worker"]
+          command: ["dumb-init", "--", "xvfb-run", "-a", "python", "-m", "twin.worker"]
           envFrom:
             - secretRef: {name: twin-secrets}
           env:
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
-            - {name: BOT_IMAGE, value: fakery:dev}
+            - {name: BOT_IMAGE, value: fakery@sha256:42ee45b1c153268beb601690d95179f3b315d997c21bb46555fbe56d28be4988}
           resources:
             requests:
               memory: "2Gi"
               cpu: "500m"
             limits:
               memory: "3Gi"
+              cpu: "2"
