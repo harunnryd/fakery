@@ -12,10 +12,149 @@
 
 ## Current state (2026-09-06, live-verified tonight)
 
+- `[~]` Pilot hardening implementation (2026-09-09): ADRs 0006–0007,
+  migrations 0005–0009, transactional session boundaries, idempotent
+  Google Meet admission, atomic PostgreSQL capacity reservations,
+  durable dispatch relay, per-bot/subscription ordered outbox with
+  retained dead rows and replay/skip API, separate sender Deployment,
+  checkpointed audio spool, recorder stop acknowledgement, transcript
+  deduplication, notes chunking, authenticated recording access, daily
+  retention accounting, and readiness/metrics endpoints are implemented.
+  `just test` and `just lint` pass. Live M1–M4 gates remain open until
+  the acceptance matrix is rerun against the new image digest. The initial
+  migration lock was drained and the deployed database is now at revision
+  `0009`.
+
+- `[~]` CPU isolation and probe budget (2026-09-09): one headed Chromium
+  Job saturated the local kind node and caused API/Postgres probe timeouts;
+  the bot then failed before admission. Bot, worker, API, sender, and
+  finalizer resource budgets plus five-second API probes are now explicit in
+  ADR 0015. A new immutable image and a single-bot retest are required before
+  the three-meeting gate is rerun.
+
+- `[~]` Provider finalization timeout (2026-09-09): the first provider-backed
+  cancel reached `recorder.stopped` with a 793597-byte recording and live
+  transcript, then remained in `recording` because batch transcription had no
+  deadline. ADR 0016 adds a 90-second batch STT deadline and a 60-second
+  per-attempt notes deadline; the regression test passes. Deployment and a
+  bounded no-audio cancel control are recorded below; provider-backed notes
+  still need a second speech-bearing run.
+
+- `[~]` Timeout rollout control (2026-09-09 17:20–17:24 UTC): immutable
+  digest `sha256:42ee45b1c153268beb601690d95179f3b315d997c21bb46555fbe56d28be4988`
+  is running across the local control plane. A fresh cancel run completed in
+  49 seconds after recorder stop with `recording_status=partial`,
+  `finalization_status=ready`, and explicit `transcription_status=silence` /
+  `notes_status=silence`. The timeout gate passes for a no-audio control;
+  provider-backed notes and the full M1–M4 matrix remain open.
+
+- `[~]` Post-fix live smoke (2026-09-09 11:52 UTC): release image digest
+  `sha256:0c16110740ef2d836826536999f68a1c326b821f6f6d7049f8a69872cf88b9ab`
+  was loaded into kind; API, worker, sender, finalizer, and migration Job
+  ran with that digest and migration `0009` completed. The recorder fix
+  produced a 140782-byte WebM; the API checksum matched the downloaded
+  object (`41b2a28987a81732f06ea47a671c1010dc82a6ae889e9712a11bab6a8ead4bea`)
+  and the container decoder accepted it. A volume probe measured
+  `mean_volume=-91.0 dB` and `max_volume=-91.0 dB`, so this run proves
+  container/checksum durability but not audible participant capture. The run
+  completed with
+  `recording_status=ready`, `finalization_status=ready`, and separate
+  `transcription_status=disabled`/`notes_status=disabled` because provider
+  keys were not configured. Full multi-meeting, recovery, and provider-backed
+  acceptance remain open.
+
+- `[~]` STT lifecycle retest (2026-09-09 13:22 UTC): image digest
+  `sha256:7250e9dd8cb77bc1b089949d95c721d121f22d36eff289ca7befc914b43a7d2b`
+  ran API, worker, sender, finalizer, and migration Job. The bot was
+  admitted at `13:22:53 UTC`; the live provider connection succeeded and
+  the checkpoint manifest was durable while recording. Two synthetic speech
+  attempts produced no transcript because the remote audio track remained
+  muted. API cancellation completed at `13:24:01 UTC`, preserved a partial
+  recording (`19,379` bytes, decode-valid, checksum verified), and returned
+  `recording_status=partial`, `finalization_status=ready`, and
+  `transcription_status=silence`. This proves stream ownership and graceful
+  cancel, but does not pass audible participant capture or M2 latency.
+
+- `[~]` Browser failure classification (2026-09-09 13:20 UTC): a separate
+  run failed before admission with `browser-open-error`; the pod log now
+  records stage and sanitized error slug. The prior generic `internal` code
+  is no longer used for this failure class.
+
+- `[~]` Admission/capture control (2026-09-09 13:25 UTC): a second host
+  admission completed and cancellation produced a 254,071-byte partial WebM
+  with non-silent decoded audio (`mean_volume=-30.7 dB`, `max_volume=-5.3 dB`).
+  No speech fixture was delivered during that run, so transcript quality and
+  live-segment latency remain unmeasured.
+
+- `[x]` No-beep browser rollout (2026-09-09 13:42 UTC): Chromium fake audio
+  input was removed from the default pilot recipe. The deployed digest
+  `sha256:0c8a4e4e9d2bcadd7080ad85e4dfa746f29289e470655bb6bfe7c392c98131b4`
+  was verified in the running bot process: only
+  `--use-fake-ui-for-media-stream` remained; the beep-producing fake-device
+  flag was absent. The bot was admitted, connected to STT, and cancelled
+  cleanly with a partial artifact. Explicit WAV fixtures remain available only
+  through `EngineConfig.fake_audio_path` for test runs.
+
+- `[~]` M1/M2 live probe (2026-09-09 14:04–14:07 UTC): bot
+  `bot_250be15e9f6b42c198d2e6c655b4105f` was admitted by the host, emitted
+  English transcript segments while still `recording`, and then completed an
+  API cancellation with a 786,621-byte decode-valid partial WebM. The API
+  checksum matched the downloaded object
+  (`778f8d433850831e6ff506f3f451223c6c8686ab6d3b53682d18c8516c0f634f`),
+  checkpoint manifest was durable, and finalization/transcription/notes all
+  reached `ready`. The live path currently exposes both final live segments
+  and overlapping batch segments after finalization; M2 remains open until
+  overlap is represented as a revision or uncovered-only segment set.
+
+- `[~]` Transcript merge follow-up (2026-09-09 15:00 UTC): the fresh live
+  probe measured a 39% timeline overlap that the previous 50% filter retained.
+  Coverage filtering now uses a 25% threshold with a regression test; the
+  resulting digest must be deployed and the live transcript gate repeated
+  before M2 can close.
+
+- `[~]` Admission evidence fix rollout (2026-09-09 14:30 UTC): a live guest
+  inspection captured the actual waiting screen text, `Please wait until a
+  meeting host brings you into the call`. The join recipe now treats this
+  phrase, `Asking to be let in`, and equivalent waiting markers as negative
+  admission evidence. Unit coverage is green and the image digest
+  `sha256:4e7ed912ec8064d3023bb61e4fd9a3cd67226cf96fa04b1d42d1e69cdf2b0cbd`
+  is deployed across API, worker, sender, finalizer, migration, and
+  retention. A fresh live confirmation still needs the worker pacing interval
+  to elapse before the host admission step can be repeated.
+
+- `[x]` Pilot rollout verification (2026-09-08 20:21 UTC): release image
+  digest `sha256:c51b1eefe8c03f6002026b4f9bf51c4dac5d04333235b47baddcde0cb3b83894`
+  loaded into kind; API, worker, sender, finalizer, and migration Job ran
+  with that digest; schema reached `0009`; `/healthz` and `/readyz` passed;
+  one create/cancel smoke run produced ordered outbox events and sender
+  retry. Retention dry-run reported `scanned=11`, `would_delete=0`,
+  `deleted=0`, `failed=0`, `kept=11`. Full 20-join/three-meeting live
+  acceptance remains open; its dedicated gate skips until three distinct
+  live meeting URLs are supplied.
+
+- `[~]` M4 combined live acceptance (2026-09-09): two create requests were
+  accepted 22.573 ms apart, but one worker handled them serially. Run A was
+  admitted, recorded for ~127.6 s, then its Job was deleted and ended
+  `job-failed`; Run B was cancelled by API and ended `cancelled` before join.
+  Four A status events and one B cancellation event entered the outbox in
+  order. Webhook.site returned 429, so all five events retried to attempt 5
+  and dead-lettered; the endpoint was restored to HTTP 200 afterward.
+  No transcript segment or partial recording survived the forced Job delete,
+  and voice overlap/barge-in remains unverified M5 scope. Worker image and
+  init fixes are in `Dockerfile`, `deploy/k8s/worker.yaml`, and
+  `src/twin/bots/jobs.py`. Full notes and raw timings: `research/load-test.md`.
+
+- `[~]` One-room participant smoke (2026-09-09): the pre-fix run exposed
+  false admission and an empty recording. The admission vocabulary now
+  recognizes the observed waiting-room labels in Indonesian and English, and
+  the recorder uses a stable mixed MediaStream with checkpoint spool. The
+  post-fix run is recorded above; M1–M4 live gates remain open until the full
+  acceptance matrix is rerun.
+
 - `[x]` Scaffold: FastAPI app, bot state machine + API (create/get/
   transcript), core (config/logging/errors), migrations, deployment
   (Dockerfile bot-ready + k8s manifests + compose), CI.
-- `[x]` M1 loop closed live: Redis-Streams worker claims runs, CloakBrowser
+- `[~]` M1 loop closed live: Redis-Streams worker claims runs, CloakBrowser
   joins real meetings (knock-and-admit ≤2 s on fresh links), DOM-channel
   audio recorded as Opus/webm, hashed + stored in MinIO
   (37 KB verified), status visible via API. 80 tests green.
@@ -27,12 +166,12 @@
   before join fails the run (`cancelled`); cancel mid-run completes it
   with the partial recording and marks `error_code=cancelled` — a user
   stop is not a failure, and the soak harness counts it as success.
-- `[x]` M2 live transcript + webhooks (verified 2026-09-07): Deepgram
-  nova-3 streaming over worker-decoded PCM16, 18 segments queryable
-  mid-meeting, batch fallback quiet when live delivers;
+- `[~]` M2 live transcript + webhooks (verified 2026-09-07): Deepgram
+  nova-3 English streaming over worker-decoded PCM16, 18 segments
+  queryable mid-meeting, batch fallback quiet when live delivers;
   `bot.status_changed` + `transcript.segment` webhooks HMAC-signed
   with retry (one transient failure auto-recovered live).
-- `[x]` M3 automatic notes (code live-verified in container, meeting
+- `[~]` M3 automatic notes (code live-verified in container, meeting
   loop pending): LangChain structured notes after transcription,
   `notes.completed` webhook, API-key auth, paginated bot listing,
   notes endpoint, request tracing.
@@ -155,7 +294,7 @@ never speaks autonomously — silence is the default state.
 - `[x]` **Exclusive lease per profile (Redis, TTL)**: the same profile
   can never run on two bots at once, making the same-account
   double-join trap impossible by construction.
-- `[x]` Retention rule: raw audio 30 days, then purge — weekly CronJob,
+- `[x]` Retention rule: raw audio 30 days, then purge — daily CronJob,
   dry-run first (M4).
 
 ### 9. `webhooks/` — real delivery (M2: status + segments, M3: notes, M4: outbox)
@@ -163,10 +302,11 @@ never speaks autonomously — silence is the default state.
 - `[x]` Emit `bot.status_changed` on every transition,
   `transcript.segment` on new segments, `notes.completed` at the end.
 - `[x]` Delivery retry policy + failure logging.
-- `[x]` Outbox with ordered per-bot sender, dead-lettering, row TTL (M4).
+- `[x]` Outbox with ordered per-bot/subscription sender, retained
+  dead-lettering, replay/skip controls, and row TTL (M4).
 
 ### 10. `api/` — complete the surface (auth, list, notes shipped)
-- `[x]` API-key auth (`X-API-Key`, keys seeded via env/config).
+- `[x]` API-key auth (`X-API-Key`, mandatory outside `dev`).
 - `[x]` `GET /v1/bots` (cursor pagination), `DELETE /v1/bots/{id}`,
   `GET /v1/bots/{id}/notes`.
 - `[ ]` Persona CRUD (`/v1/personas`) + brief submission
@@ -183,6 +323,9 @@ never speaks autonomously — silence is the default state.
 - `[x]` Kubernetes manifests (`deploy/k8s/`): namespace, Postgres,
   Redis, MinIO (all with PVCs), migrate Job, API Deployment + Service
   — deployable today on any k8s (Docker Desktop to real clusters).
+- `[x]` Separate sender and recording-finalizer Deployments share the
+  release image path; finalizer reconstructs checkpoint prefixes
+  after a failed bot Job.
 - `[x]` Worker Deployment live with module 1 (same image, worker
   command under Xvfb; per-bot isolation tiers attach here);
   prod-grade ingress, HPA and multi-node scheduling later.

@@ -1,6 +1,6 @@
 # ADR 0005 — Webhook outbox with ordered sender
 
-Date: 2026-09-08. Status: accepted.
+Date: 2026-09-08. Status: superseded by ADR 0006.
 
 ## Context
 
@@ -13,10 +13,10 @@ meeting. Delivery must not share fate with ingestion.
 
 Emit writes rows (`webhook_deliveries`: url, payload with `event_id`,
 attempts, `next_try_at`); a sender loop in the worker delivers them.
-Ordering per bot via a Redis mutex per `bot_id` (atomic SET NX with
-TTL — no connection held across HTTP, crash-safe by expiry). Backoff
-doubles per attempt, 5 attempts max, then the row is deleted with an
-error log; rows older than 30 days are purged by the same loop.
+Ordering per bot and subscription now uses a Redis lease plus database
+sequence and delivery status. Backoff doubles with ten attempts maximum;
+exhausted rows remain as dead evidence and later events block until replay or
+skip. Rows older than 30 days are purged by the dedicated sender.
 At-least-once stays explicit: receivers deduplicate on `event_id`.
 
 Considered and rejected: drop-on-fail (breaks the retry promise),
@@ -26,5 +26,5 @@ advisory locks (correct but holds transactions across network calls).
 
 ## Consequences
 
-One migration, one sender task, no new dependencies. The inline
-`WebhookDispatcher` is gone; `DbOutbox` implements `EventSink`.
+The sender is a separate Deployment. `DbOutbox` implements `EventSink` and
+shares the state transaction when bound to its session.
